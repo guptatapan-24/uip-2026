@@ -1,0 +1,7 @@
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+httpx==0.25.2
+redis==5.0.1
+aioredis==2.0.1
+pydantic==2.5.0
+celery==5.3.4

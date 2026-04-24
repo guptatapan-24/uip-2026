@@ -1,0 +1,4 @@
+spacy==3.7.2
+transformers==4.36.2
+torch==2.1.2
+pydantic==2.5.0
