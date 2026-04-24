@@ -28,24 +28,22 @@ class ValidationStep(BaseModel):
     confidence: float
 
 
+
+class SourceCitation(BaseModel):
+    source: str
+    url: str
+    snippet: str
+
 class ExplainabilityReport(BaseModel):
     """Comprehensive explainability report."""
     decision_id: str
     outcome: str  # ALLOW | FLAG | BLOCK | CORRECT
     risk_score: float
-    
-    # Validation evidence
-    validation_chain: List[ValidationStep] = []
-    threat_intel_matches: List[Dict] = []
-    
-    # Component breakdown
-    component_scores: Dict[str, float] = {}
-    
-    # Analyst guidance
+    source_citations: List[SourceCitation] = []
+    confidence_breakdown: Dict[str, float] = {}
+    rule_trace: List[Dict] = []
     analyst_rationale: str
-    recommended_action: str  # "APPROVE", "INVESTIGATE", "BLOCK", "APPLY_CORRECTION"
-    
-    # Metadata
+    override_available: bool = False
     generated_at: str
     processing_latency_ms: float
 
@@ -61,69 +59,68 @@ class ReportBuilder:
     
     async def build_report(
         self,
-        decision_id: str,
-        outcome: str,
-        risk_score: float,
+        claims: List[Dict],
         validation_results: List[Dict],
-        threat_intel_matches: List[Dict],
-        component_scores: Dict[str, float],
-        processing_latency_ms: float
+        decision: Dict
     ) -> ExplainabilityReport:
         """
-        Build comprehensive explainability report.
-        
-        Args:
-            decision_id: Unique decision identifier
-            outcome: Final decision outcome
-            risk_score: Computed risk score
-            validation_results: Results from all validation stages
-            threat_intel_matches: Retrieved threat intelligence
-            component_scores: Risk score component breakdown
-            processing_latency_ms: End-to-end pipeline latency
-            
-        Returns:
-            Comprehensive explainability report
+        Build explainability report from claims, validation, and decision.
         """
-        # Build validation chain
-        validation_chain = self._build_validation_chain(validation_results)
-        
-        # Select analyst rationale
-        rationale = self._generate_rationale(
-            outcome,
-            risk_score,
-            validation_chain,
-            threat_intel_matches
-        )
-        
-        # Recommend action
-        recommended_action = self._recommend_action(outcome, risk_score)
-        
+        # Source citations from threat intel evidence
+        source_citations = [
+            SourceCitation(
+                source=ev.get("source", "NVD"),
+                url=ev.get("url", ""),
+                snippet=ev.get("snippet", "")
+            ) for ev in decision.get("threat_intel_matches", [])
+        ]
+        # Confidence breakdown per claim
+        confidence_breakdown = {
+            c.get("claim_type", f"claim_{i}"): c.get("confidence", 0.0)
+            for i, c in enumerate(claims)
+        }
+        # Rule trace
+        rule_trace = [
+            {
+                "rule_id": r.get("rule_id"),
+                "passed": r.get("passed"),
+                "evidence": r.get("evidence")
+            } for r in validation_results
+        ]
+        # Analyst rationale (template-based)
+        rationale = self._template_rationale(claims, validation_results, decision)
+        # Override available
+        override_available = decision.get("outcome") == "BLOCK" and bool(decision.get("correction_candidate"))
         return ExplainabilityReport(
-            decision_id=decision_id,
-            outcome=outcome,
-            risk_score=risk_score,
-            validation_chain=validation_chain,
-            threat_intel_matches=threat_intel_matches,
-            component_scores=component_scores,
+            decision_id=decision.get("decision_id", ""),
+            outcome=decision.get("outcome", ""),
+            risk_score=decision.get("risk_score", 0.0),
+            source_citations=source_citations,
+            confidence_breakdown=confidence_breakdown,
+            rule_trace=rule_trace,
             analyst_rationale=rationale,
-            recommended_action=recommended_action,
+            override_available=override_available,
             generated_at=datetime.now().isoformat(),
-            processing_latency_ms=processing_latency_ms
+            processing_latency_ms=decision.get("processing_latency_ms", 0.0)
         )
     
-    def _build_validation_chain(self, validation_results: List[Dict]) -> List[ValidationStep]:
-        """Convert validation results to explanation chain."""
-        chain = []
-        for result in validation_results:
-            step = ValidationStep(
-                step_name=result.get("stage", "unknown"),
-                rule_name=result.get("rule_name", ""),
-                passed=result.get("passed", False),
-                evidence=result.get("evidence", ""),
-                confidence=result.get("confidence", 0.0)
-            )
-            chain.append(step)
-        return chain
+
+    def _template_rationale(self, claims, validation_results, decision) -> str:
+        """
+        Generate analyst rationale using template strings.
+        """
+        cve = next((c for c in claims if c.get("claim_type") == "CVE_ID"), None)
+        cvss = next((c for c in claims if c.get("claim_type") == "CVSS_SCORE"), None)
+        attack = next((c for c in claims if c.get("claim_type") == "ATTACK_TECHNIQUE"), None)
+        parts = []
+        if cve:
+            parts.append(f"CVE {cve.get('text')} found in NVD.")
+        if cvss:
+            parts.append(f"CVSS {cvss.get('text')} extracted.")
+        if attack:
+            parts.append(f"ATT&CK technique {attack.get('text')} is valid.")
+        parts.append(f"Decision: {decision.get('outcome')} with confidence {decision.get('risk_score', 0.0):.2f}.")
+        return " ".join(parts)
     
     def _generate_rationale(
         self,

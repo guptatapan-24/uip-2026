@@ -111,13 +111,67 @@ class DecisionEngine:
     async def decide(self, decision_input: DecisionInput) -> DecisionOutput:
         """
         Compute decision outcome from validation results.
-        
-        Args:
-            decision_input: Validation results and context
-            
-        Returns:
-            Decision outcome with risk score and rationale
+        Uses weighted risk scoring and policy profile thresholds.
         """
+        profile = self.policy_profiles.get(
+            decision_input.policy_profile_name, self.policy_profiles["default"]
+        )
+        weights = profile.rule_weights or self.DEFAULT_WEIGHTS
+        thresholds = profile.thresholds or self.DEFAULT_THRESHOLDS
+
+        # Map rule results to component scores
+        component_scores = {
+            "cve_validity": 0.0,
+            "severity_accuracy": 0.0,
+            "mitigation_relevance": 0.0,
+            "urgency_consistency": 0.0
+        }
+        hard_fail = False
+        correction_candidate = None
+        for r in decision_input.validation_results:
+            rule_id = r.get("rule_id")
+            score = r.get("score", 0.0)
+            passed = r.get("passed", True)
+            if rule_id in component_scores:
+                component_scores[rule_id] = score
+            if not passed:
+                hard_fail = True
+                if r.get("correction_candidate"):
+                    correction_candidate = r["correction_candidate"]
+
+        # Risk score calculation
+        risk_score = sum(
+            weights.get(k, 0.0) * component_scores.get(k, 0.0)
+            for k in component_scores
+        )
+        # Clamp to [0, 1]
+        risk_score = max(0.0, min(1.0, risk_score))
+
+        # Decision logic
+        if hard_fail:
+            if correction_candidate:
+                outcome = "CORRECT"
+            else:
+                outcome = "BLOCK"
+        elif risk_score >= thresholds.get("allow_min", 0.85):
+            outcome = "ALLOW"
+        elif risk_score >= thresholds.get("flag_min", 0.60):
+            outcome = "FLAG"
+        else:
+            outcome = "BLOCK"
+
+        rationale = (
+            f"Decision: {outcome}. Risk score: {risk_score:.2f}. "
+            f"Component scores: {component_scores}."
+        )
+        return DecisionOutput(
+            decision_id=str(uuid.uuid4()),
+            outcome=outcome,
+            risk_score=risk_score,
+            component_scores=component_scores,
+            correction_candidate=correction_candidate,
+            rationale=rationale
+        )
         decision_id = str(uuid.uuid4())
         
         # Get policy profile

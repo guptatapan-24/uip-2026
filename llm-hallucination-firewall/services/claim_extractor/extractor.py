@@ -10,15 +10,20 @@ Combines three approaches:
 Returns structured Claim objects with confidence scores and evidence.
 """
 
+
 import re
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
-
 from models import Claim, ClaimRequest, ClaimResponse
-
-# TODO: Import spacy
-# TODO: Import transformers (BERT)
+try:
+    import spacy
+except ImportError:
+    spacy = None
+try:
+    from transformers import pipeline
+except ImportError:
+    pipeline = None
 
 
 class ClaimExtractor:
@@ -45,48 +50,39 @@ class ClaimExtractor:
     
     def __init__(self):
         """Initialize extraction models."""
-        # TODO: Load spaCy English model
-        # self.nlp = spacy.load("en_core_web_sm")
-        
-        # TODO: Load BERT tokenizer and model for span extraction
-        # self.bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-        # self.bert_model = BertModel.from_pretrained("bert-base-uncased")
-        
-        pass
+        self.nlp = None
+        if spacy:
+            try:
+                self.nlp = spacy.load("en_core_web_sm")
+            except Exception:
+                self.nlp = None
+        self.bert_pipeline = None
+        if pipeline:
+            try:
+                self.bert_pipeline = pipeline("token-classification")
+            except Exception:
+                self.bert_pipeline = None
     
+
     def extract(self, request: ClaimRequest) -> ClaimResponse:
         """
         Main extraction pipeline orchestrator.
-        
-        Args:
-            request: Extraction request with text and options
-            
-        Returns:
-            ClaimResponse with extracted claims
+        Returns ClaimResponse with extracted claims.
         """
         start_time = datetime.now()
-        text = request.text
-        claims = []
-        
-        # Step 1: Regex-based extraction for structured patterns
-        regex_claims = self._extract_regex_patterns(text)
-        claims.extend(regex_claims)
-        
-        # Step 2: spaCy NER if enabled
-        if request.enable_ner:
-            ner_claims = self._extract_ner_entities(text)
-            claims.extend(ner_claims)
-        
-        # Step 3: BERT span extraction if enabled
-        if request.enable_span_extraction:
-            span_claims = self._extract_spans(text)
-            claims.extend(span_claims)
-        
-        # Deduplicate and normalize
+        text = request.text or ""
+        claims: List[Claim] = []
+        # Pass 1: Regex
+        claims.extend(self._extract_regex_patterns(text))
+        # Pass 2: spaCy NER
+        if request.enable_ner and self.nlp:
+            claims.extend(self._extract_ner_entities(text))
+        # Pass 3: BERT span extraction
+        if request.enable_span_extraction and self.bert_pipeline:
+            claims.extend(self._extract_spans(text))
+        # Deduplicate
         claims = self._deduplicate_claims(claims)
-        
         latency_ms = (datetime.now() - start_time).total_seconds() * 1000
-        
         return ClaimResponse(
             input_text=text,
             claims=[self._claim_to_dict(c) for c in claims],
@@ -97,27 +93,116 @@ class ClaimExtractor:
     
     def _extract_regex_patterns(self, text: str) -> List[Claim]:
         """Extract claims using regex patterns."""
+        claims: List[Claim] = []
+        for key, pattern in self.PATTERNS.items():
+            for match in pattern.finditer(text):
+                if key == "CVSS_SCORE":
+                    val = match.group(1) if match.lastindex else match.group(0)
+                elif key == "VERSION":
+                    val = match.group(1) if match.lastindex else match.group(0)
+                elif key == "ATTACK_TECHNIQUE":
+                    val = match.group(1) if match.lastindex else match.group(0)
+                else:
+                    val = match.group(0)
+                claims.append(Claim(
+                    claim_id=str(uuid.uuid4()),
+                    text=val,
+                    claim_type=key,
+                    confidence=0.95 if key == "CVE_ID" else 0.90,
+                    span_start=match.start(),
+                    span_end=match.end(),
+                    evidence_tokens=[val]
+                ))
+        return claims
+
+    def _extract_ner_entities(self, text: str) -> List[Claim]:
+        """Extract claims using spaCy NER (product, version, severity)."""
+        if not self.nlp:
+            return []
+        doc = self.nlp(text)
         claims = []
-        
-        # CVE IDs
-        for match in self.PATTERNS["CVE_ID"].finditer(text):
-            claims.append(Claim(
-                claim_id=str(uuid.uuid4()),
-                text=match.group(),
-                claim_type="CVE_ID",
-                confidence=0.95,  # High confidence for regex match
-                span_start=match.start(),
-                span_end=match.end(),
-                evidence_tokens=[match.group()]
-            ))
-        
-        # CVSS Scores
-        for match in self.PATTERNS["CVSS_SCORE"].finditer(text):
-            claims.append(Claim(
-                claim_id=str(uuid.uuid4()),
-                text=match.group(),
-                claim_type="CVSS_SCORE",
-                confidence=0.90,
+        for ent in doc.ents:
+            if ent.label_ in {"PRODUCT", "ORG", "GPE"}:
+                claims.append(Claim(
+                    claim_id=str(uuid.uuid4()),
+                    text=ent.text,
+                    claim_type="PRODUCT",
+                    confidence=0.85,
+                    span_start=ent.start_char,
+                    span_end=ent.end_char,
+                    evidence_tokens=[ent.text]
+                ))
+            elif ent.label_ == "CARDINAL":
+                claims.append(Claim(
+                    claim_id=str(uuid.uuid4()),
+                    text=ent.text,
+                    claim_type="VERSION",
+                    confidence=0.80,
+                    span_start=ent.start_char,
+                    span_end=ent.end_char,
+                    evidence_tokens=[ent.text]
+                ))
+            elif ent.label_ == "NORP":
+                claims.append(Claim(
+                    claim_id=str(uuid.uuid4()),
+                    text=ent.text,
+                    claim_type="SEVERITY_LEVEL",
+                    confidence=0.80,
+                    span_start=ent.start_char,
+                    span_end=ent.end_char,
+                    evidence_tokens=[ent.text]
+                ))
+        return claims
+
+    def _extract_spans(self, text: str) -> List[Claim]:
+        """Extract mitigation/urgency spans using BERT token classification."""
+        if not self.bert_pipeline:
+            return []
+        results = self.bert_pipeline(text)
+        claims = []
+        for r in results:
+            label = r.get("entity", "")
+            if "mitigation" in label.lower():
+                claims.append(Claim(
+                    claim_id=str(uuid.uuid4()),
+                    text=text[r["start"]:r["end"]],
+                    claim_type="MITIGATION_ACTION",
+                    confidence=0.80,
+                    span_start=r["start"],
+                    span_end=r["end"],
+                    evidence_tokens=[text[r["start"]:r["end"]]]
+                ))
+            elif "urgency" in label.lower():
+                claims.append(Claim(
+                    claim_id=str(uuid.uuid4()),
+                    text=text[r["start"]:r["end"]],
+                    claim_type="URGENCY_ASSERTION",
+                    confidence=0.80,
+                    span_start=r["start"],
+                    span_end=r["end"],
+                    evidence_tokens=[text[r["start"]:r["end"]]]
+                ))
+        return claims
+
+    def _deduplicate_claims(self, claims: List[Claim]) -> List[Claim]:
+        seen = set()
+        deduped = []
+        for c in claims:
+            key = (c.claim_type, c.text, c.span_start, c.span_end)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(c)
+        return deduped
+
+    def _claim_to_dict(self, c: Claim) -> Dict[str, Any]:
+        return {
+            "claim_id": c.claim_id,
+            "raw_text": c.text,
+            "claim_type": c.claim_type,
+            "extracted_value": c.text,
+            "position": (c.span_start, c.span_end),
+            "confidence": c.confidence
+        }
                 span_start=match.start(),
                 span_end=match.end(),
                 evidence_tokens=[match.group(1)]
