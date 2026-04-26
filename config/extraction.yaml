@@ -1,0 +1,69 @@
+regex:
+  cve:
+    pattern: "\\bCVE-(?:19|20)\\d{2}-\\d{4,7}\\b"
+    confidence: 0.98
+  attack:
+    pattern: "\\bT\\d{4}(?:\\.\\d{3})?\\b"
+    confidence: 0.97
+  cvss:
+    pattern: "\\bCVSS(?:\\s*(?:v3(?:\\.1)?|score)?)?[:\\s]+(?P<score>10(?:\\.0)?|[0-9](?:\\.\\d)?)\\b"
+    confidence: 0.96
+spacy:
+  model_name: "en_core_web_sm"
+  model_path_env: "SECURITY_SPACY_MODEL_PATH"
+  training_data_path: "tests/fixtures/security_ner_annotations.jsonl"
+  default_output_dir: "artifacts/security_spacy_model"
+  fallback_confidence: 0.78
+  entity_patterns:
+    PRODUCT:
+      - "Apache Log4j"
+      - "Microsoft Outlook"
+      - "Windows Server"
+      - "OpenSSH"
+      - "Cisco ASA"
+      - "FortiOS"
+    SEVERITY:
+      - "critical"
+      - "high"
+      - "medium"
+      - "low"
+    VERSION:
+      - "2.14.1"
+      - "2.15.0"
+      - "2.17.0"
+      - "16.0.1"
+      - "1.2.3"
+      - "3.0.0"
+      - "9.8"
+      - "9.8.1"
+bert:
+  model_name: "dslim/bert-base-NER"
+  model_name_env: "SECURITY_BERT_MODEL_NAME"
+  training_data_path: "tests/fixtures/mitigation_span_annotations.jsonl"
+  aggregation_strategy: "simple"
+  mitigation_confidence: 0.74
+  urgency_confidence: 0.72
+  mitigation_entity_groups:
+    - "ACTION"
+    - "MITIGATION"
+  urgency_entity_groups:
+    - "URGENCY"
+    - "PRIORITY"
+  mitigation_verbs:
+    - "apply"
+    - "patch"
+    - "block"
+    - "isolate"
+    - "disable"
+    - "update"
+    - "upgrade"
+    - "rotate"
+    - "revoke"
+    - "quarantine"
+    - "restrict"
+  urgency_keywords:
+    - "immediately"
+    - "urgent"
+    - "as soon as possible"
+    - "high priority"
+    - "critical priority"

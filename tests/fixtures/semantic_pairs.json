@@ -1,0 +1,42 @@
+[
+  {
+    "claim_text": "patch exposed outlook systems",
+    "evidence_text": "patch outlook systems now",
+    "label": true
+  },
+  {
+    "claim_text": "upgrade apache log4j",
+    "evidence_text": "upgrade apache log4j hotfix",
+    "label": true
+  },
+  {
+    "claim_text": "rotate access service keys",
+    "evidence_text": "rotate access keys",
+    "label": true
+  },
+  {
+    "claim_text": "revoke stolen access tokens",
+    "evidence_text": "revoke access tokens",
+    "label": true
+  },
+  {
+    "claim_text": "restrict public facing access",
+    "evidence_text": "restrict public access",
+    "label": true
+  },
+  {
+    "claim_text": "disable all outbound traffic",
+    "evidence_text": "patch outlook systems",
+    "label": false
+  },
+  {
+    "claim_text": "wipe every workstation",
+    "evidence_text": "apply vendor hotfix",
+    "label": false
+  },
+  {
+    "claim_text": "shut down email globally",
+    "evidence_text": "rotate access keys",
+    "label": false
+  }
+]
