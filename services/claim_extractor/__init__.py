@@ -1,9 +1,5 @@
-# services/claim_extractor/__init__.py
-"""
-Claim extraction service module.
+"""Claim extraction pipeline package."""
 
-Extracts structured claims from unstructured LLM recommendations using:
-- Regex patterns for CVE IDs, CVSS scores, technique IDs
-- spaCy NER for entity recognition
-- BERT span extraction for semantic claim boundaries
-"""
+from services.claim_extractor.extractor import ClaimExtractor, extract_claims
+
+__all__ = ["ClaimExtractor", "extract_claims"]

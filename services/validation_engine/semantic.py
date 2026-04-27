@@ -1,110 +1,93 @@
-# services/validation_engine/semantic.py
-"""
-Semantic validation using cosine similarity.
+"""Semantic validation using sentence-transformer similarity with policy overrides."""
 
-Compares claim text against threat intelligence descriptions using 
-sentence-transformers embeddings. Threshold loaded from policy profile (default 0.72).
+from __future__ import annotations
 
-Returns: {rule_id, passed, evidence, confidence, similarity_score}
+import asyncio
+from functools import cached_property
+from typing import Any
 
-TODO: Load semantic threshold from policy_profiles.yaml dynamically
-"""
+from services.common.config import load_profile
+from services.common.models import SemanticValidationResult
 
-import numpy as np
-from typing import Optional, Dict
-from sentence_transformers import SentenceTransformer, util
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception:  # pragma: no cover - optional dependency fallback
+    SentenceTransformer = None  # type: ignore[assignment]
 
 
-class SemanticValidator:
-    """
-    Semantic similarity-based validator.
-    """
-    
-    # Default embedding model and similarity threshold
-    EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-    DEFAULT_THRESHOLD = 0.72
-    
-    def __init__(self, threshold: float = DEFAULT_THRESHOLD):
-        """
-        Initialize semantic validator.
-        
-        Args:
-            threshold: Cosine similarity threshold (0.0-1.0)
-        """
-        self.model = SentenceTransformer(self.EMBEDDING_MODEL)
-        self.threshold = threshold
-    
-    async def validate_claim(
+class SemanticScorer:
+    """Similarity scorer for mitigation relevance and contextual grounding."""
+
+    def __init__(self, profile_name: str = "default") -> None:
+        self.profile_name = profile_name
+        self.profile = load_profile(profile_name)
+
+    @cached_property
+    def model_name(self) -> str:
+        return str(self.profile.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2"))
+
+    @cached_property
+    def model(self) -> Any | None:
+        if SentenceTransformer is None:
+            return None
+        try:
+            return SentenceTransformer(self.model_name)
+        except Exception:
+            return None
+
+    async def score(
         self,
         claim_text: str,
-        reference_text: str,
-        policy_profile: Optional[Dict] = None
-    ) -> Dict:
-        """
-        Validate claim against reference text using semantic similarity.
-        
-        Args:
-            claim_text: Extracted claim from LLM output
-            reference_text: Authoritative description from threat intel
-            policy_profile: Optional profile with custom threshold
-            
-        Returns:
-            {
-                "rule_id": "semantic_similarity",
-                "passed": bool,
-                "evidence": str,
-                "confidence": float,
-                "similarity_score": float,
-                "threshold": float
-            }
-        """
-        # Get threshold from policy profile if provided
-        threshold = self.threshold
-        if policy_profile:
-            threshold = policy_profile.get("semantic_threshold", self.threshold)
-        
-        # Generate embeddings
-        claim_embedding = self.model.encode(claim_text, convert_to_tensor=True)
-        reference_embedding = self.model.encode(reference_text, convert_to_tensor=True)
-        
-        # Compute cosine similarity
-        similarity = util.pytorch_cos_sim(claim_embedding, reference_embedding).item()
-        
-        # Determine pass/fail
-        passed = similarity >= threshold
-        
-        return {
-            "rule_id": "semantic_similarity",
-            "rule_name": "Semantic similarity to threat intel",
-            "passed": passed,
-            "evidence": (
-                f"Similarity: {similarity:.3f} vs threshold {threshold:.3f}. "
-                f"Claim: '{claim_text[:60]}...' matches reference context."
-            ),
-            "confidence": min(1.0, similarity + 0.1),  # Confidence increases with similarity
-            "similarity_score": similarity,
-            "threshold": threshold
-        }
-    
-    async def validate_batch(
-        self,
-        claims: list,
-        threat_intel_texts: list,
-        policy_profile: Optional[Dict] = None
-    ) -> list:
-        """
-        Validate multiple claims against threat intel in batch.
-        
-        Args:
-            claims: List of claim text strings
-            threat_intel_texts: List of reference text strings (same length)
-            policy_profile: Optional policy profile
-            
-        Returns:
-            List of validation results
-        """
-        results = []
-        for claim, ref_text in zip(claims, threat_intel_texts):
-            result = await self.validate_claim(claim, ref_text, policy_profile)
-            results.append(result)
-        return results
+        evidence_texts: list[str],
+        threshold_override: float | None = None,
+    ) -> SemanticValidationResult:
+        """Score the best evidence chunk against a claim using embeddings or lexical fallback."""
+        threshold = float(threshold_override if threshold_override is not None else self.profile.get("semantic_threshold", 0.72))
+        if not evidence_texts:
+            return SemanticValidationResult(
+                claim_text=claim_text,
+                evidence_text="",
+                similarity=0.0,
+                threshold=threshold,
+                passed=False,
+                model_name=self.model_name,
+            policy_profile=self.profile_name,
+        )
+
+        best_text, best_score = await asyncio.to_thread(self._best_similarity, claim_text, evidence_texts)
+        return SemanticValidationResult(
+            claim_text=claim_text,
+            evidence_text=best_text,
+            similarity=round(best_score, 4),
+            threshold=threshold,
+            passed=best_score >= threshold,
+            model_name=self.model_name if self.model is not None else "lexical-fallback",
+            policy_profile=self.profile_name,
+        )
+
+    async def similarity(self, claim_text: str, evidence_texts: list[str]) -> tuple[str, float]:
+        """Return the best evidence chunk and raw similarity score without thresholding."""
+        if not evidence_texts:
+            return "", 0.0
+        return await asyncio.to_thread(self._best_similarity, claim_text, evidence_texts)
+
+    def _best_similarity(self, claim_text: str, evidence_texts: list[str]) -> tuple[str, float]:
+        if self.model is not None:
+            claim_embedding = self.model.encode(claim_text, normalize_embeddings=True)
+            evidence_embeddings = self.model.encode(evidence_texts, normalize_embeddings=True)
+            similarities = [float(claim_embedding @ embedding) for embedding in evidence_embeddings]
+        else:
+            similarities = [self._lexical_similarity(claim_text, evidence) for evidence in evidence_texts]
+
+        best_index = max(range(len(evidence_texts)), key=lambda idx: similarities[idx])
+        return evidence_texts[best_index], float(similarities[best_index])
+
+    @staticmethod
+    def _lexical_similarity(left: str, right: str) -> float:
+        left_tokens = {token.lower() for token in left.split() if token.strip()}
+        right_tokens = {token.lower() for token in right.split() if token.strip()}
+        if not left_tokens or not right_tokens:
+            return 0.0
+        intersection = len(left_tokens & right_tokens)
+        union = len(left_tokens | right_tokens)
+        return intersection / union

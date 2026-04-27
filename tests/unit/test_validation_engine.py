@@ -1,71 +1,59 @@
-# tests/unit/test_validation_engine.py
-"""
-Unit tests for validation engine modules.
+"""Unit tests for deterministic validation compatibility wrappers."""
 
-Tests:
-- Deterministic rule engine
-- Semantic similarity validation
-- LLM verifier circuit breaker
-"""
+from __future__ import annotations
+
+import asyncio
 
 import pytest
+
 from services.validation_engine.deterministic import DeterministicValidator
 
 
 @pytest.fixture
-def validator():
-    """Fixture: initialized DeterministicValidator."""
+def validator() -> DeterministicValidator:
+    """Return a validator instance for legacy-compatibility tests."""
     return DeterministicValidator()
 
 
-@pytest.mark.asyncio
-async def test_cve_exists_rule(validator):
-    """Test CVE existence validation rule."""
+def test_cve_exists_rule(validator: DeterministicValidator) -> None:
+    """Validate the legacy CVE existence path against dict-based threat intel."""
     claims = [
         {
             "claim_id": "claim-001",
             "text": "CVE-2024-1234",
             "claim_type": "CVE_ID",
-            "confidence": 0.95
+            "confidence": 0.95,
         }
     ]
-    
     threat_intel = {
         "cves": {
-            "CVE-2024-1234": {"base_score": 9.8}
+            "CVE-2024-1234": {"base_score": 9.8},
         }
     }
-    
-    results = await validator.validate(claims, threat_intel)
-    
-    cve_rule = next((r for r in results if r.rule_id == "cve_exists_in_nvd"), None)
+
+    results = asyncio.run(validator.validate(claims, threat_intel))
+    cve_rule = next((result for result in results if result.rule_id == "cve_exists_in_nvd"), None)
+
     assert cve_rule is not None
     assert cve_rule.passed
 
 
-@pytest.mark.asyncio
-async def test_cvss_score_rule(validator):
-    """Test CVSS score range validation."""
+def test_cvss_score_rule(validator: DeterministicValidator) -> None:
+    """Validate the legacy CVSS tolerance path."""
     claims = [
         {
             "claim_id": "claim-001",
             "text": "9.8",
             "claim_type": "CVSS_SCORE",
-            "confidence": 0.90
+            "confidence": 0.90,
         }
     ]
-    
     threat_intel = {
-        "cvss_score": 9.9
+        "cvss_score": 9.9,
     }
-    
-    results = await validator.validate(claims, threat_intel)
-    
-    cvss_rule = next((r for r in results if r.rule_id == "cvss_score_in_range"), None)
+
+    results = asyncio.run(validator.validate(claims, threat_intel))
+    cvss_rule = next((result for result in results if result.rule_id == "cvss_score_in_range"), None)
+
     assert cvss_rule is not None
-    # Should pass with ±0.3 tolerance
-
-
-# TODO: Add tests for semantic validation
-# TODO: Add tests for LLM verifier timeout
-# TODO: Add integration tests with full pipeline
+    assert cvss_rule.passed

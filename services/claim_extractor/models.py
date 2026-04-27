@@ -41,7 +41,7 @@ class ClaimResponse(BaseModel):
 
 class CVEClaim(BaseModel):
     """Specific claim for CVE identification."""
-    cve_id: str = Field(..., regex=r"CVE-\d{4}-\d{4,}")
+    cve_id: str = Field(..., pattern=r"CVE-\d{4}-\d{4,}")
     severity: Optional[str] = None  # CRITICAL, HIGH, MEDIUM, LOW
     base_score: Optional[float] = Field(None, ge=0.0, le=10.0)
     affected_products: Optional[List[str]] = None
@@ -49,7 +49,7 @@ class CVEClaim(BaseModel):
 
 class AttackTechniqueClaim(BaseModel):
     """Specific claim for MITRE ATT&CK technique."""
-    technique_id: str = Field(..., regex=r"T\d{4}")
+    technique_id: str = Field(..., pattern=r"T\d{4}")
     tactic: Optional[str] = None
     description: Optional[str] = None
     related_cves: Optional[List[str]] = None

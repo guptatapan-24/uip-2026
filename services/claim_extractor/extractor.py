@@ -1,219 +1,383 @@
-# services/claim_extractor/extractor.py
-"""
-Claim extraction pipeline using regex, spaCy NER, and BERT span extraction.
+"""Three-pass claim extraction pipeline for SOC-oriented security text."""
 
-Combines three approaches:
-1. Regex patterns for structured claims (CVE IDs, CVSS scores, technique IDs)
-2. spaCy NER for entity recognition (ORG, PERSON, GPE, etc.)
-3. BERT span extraction for semantic claim boundaries
+from __future__ import annotations
 
-Returns structured Claim objects with confidence scores and evidence.
-"""
-
+import asyncio
+import os
 import re
-import uuid
-from typing import List, Optional
-from datetime import datetime
+from collections.abc import Coroutine
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from functools import cached_property
+from time import perf_counter
+from typing import Any
 
-from models import Claim, ClaimRequest, ClaimResponse
+from services.common.config import load_yaml_config
+from services.common.models import Claim, ClaimType
 
-# TODO: Import spacy
-# TODO: Import transformers (BERT)
+try:
+    from services.claim_extractor.models import ClaimRequest, ClaimResponse
+except Exception:  # pragma: no cover - optional dependency fallback
+    ClaimRequest = None  # type: ignore[assignment]
+    ClaimResponse = None  # type: ignore[assignment]
+
+try:
+    import spacy
+    from spacy.language import Language
+    from spacy.pipeline import EntityRuler
+except Exception:  # pragma: no cover - optional dependency fallback
+    spacy = None
+    Language = Any  # type: ignore[assignment]
+    EntityRuler = Any  # type: ignore[assignment]
+
+try:
+    from transformers import pipeline
+except Exception:  # pragma: no cover - optional dependency fallback
+    pipeline = None  # type: ignore[assignment]
+
+
+@dataclass(slots=True)
+class RegexSpec:
+    """Compiled regex specification for one claim type."""
+
+    claim_type: ClaimType
+    pattern: re.Pattern[str]
+    confidence: float
+
+
+class RegexPassExtractor:
+    """Pass 1 extractor for structured CVE, ATT&CK, and CVSS patterns."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        regex_section = config.get("regex", {})
+        self._specs = [
+            RegexSpec(ClaimType.CVE, re.compile(regex_section["cve"]["pattern"], re.IGNORECASE), regex_section["cve"]["confidence"]),
+            RegexSpec(
+                ClaimType.ATTACK_ID,
+                re.compile(regex_section["attack"]["pattern"], re.IGNORECASE),
+                regex_section["attack"]["confidence"],
+            ),
+            RegexSpec(ClaimType.CVSS, re.compile(regex_section["cvss"]["pattern"], re.IGNORECASE), regex_section["cvss"]["confidence"]),
+        ]
+
+    def extract(self, text: str) -> list[Claim]:
+        claims: list[Claim] = []
+        for spec in self._specs:
+            for match in spec.pattern.finditer(text):
+                extracted = match.group("score") if spec.claim_type == ClaimType.CVSS and "score" in match.groupdict() else match.group(0)
+                claims.append(
+                    Claim(
+                        claim_type=spec.claim_type,
+                        raw_text=match.group(0),
+                        extracted_value=extracted,
+                        position=(match.start(), match.end()),
+                        confidence=spec.confidence,
+                        metadata={"source_pass": "regex"},
+                    )
+                )
+        return claims
+
+
+class SecuritySpacyExtractor:
+    """Pass 2 extractor using spaCy with a security-oriented fallback entity ruler."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = config.get("spacy", {})
+
+    @cached_property
+    def nlp(self) -> Language | None:
+        if spacy is None:
+            return None
+
+        model_path = os.getenv(self._config.get("model_path_env", "SECURITY_SPACY_MODEL_PATH"))
+        model_name = model_path or self._config.get("model_name", "en_core_web_sm")
+        try:
+            return spacy.load(model_name)
+        except Exception:
+            nlp = spacy.blank("en")
+            ruler = nlp.add_pipe("entity_ruler")  # type: ignore[assignment]
+            assert isinstance(ruler, EntityRuler)
+            patterns: list[dict[str, Any]] = []
+            for label, values in self._config.get("entity_patterns", {}).items():
+                for value in values:
+                    patterns.append({"label": label, "pattern": value})
+            ruler.add_patterns(patterns)
+            return nlp
+
+    def extract(self, text: str) -> list[Claim]:
+        label_map = {
+            "PRODUCT": ClaimType.PRODUCT,
+            "VERSION": ClaimType.VERSION,
+            "SEVERITY": ClaimType.SEVERITY,
+        }
+
+        claims: list[Claim] = []
+        nlp = self.nlp
+        if nlp is not None:
+            doc = nlp(text)
+            for ent in doc.ents:
+                claim_type = label_map.get(ent.label_)
+                if claim_type is None:
+                    continue
+                claims.append(
+                    Claim(
+                        claim_type=claim_type,
+                        raw_text=ent.text,
+                        extracted_value=ent.text,
+                        position=(ent.start_char, ent.end_char),
+                        confidence=float(self._config.get("fallback_confidence", 0.78)),
+                        metadata={
+                            "source_pass": "spacy",
+                            "entity_label": ent.label_,
+                            "custom_model_loaded": bool(os.getenv(self._config.get("model_path_env", "SECURITY_SPACY_MODEL_PATH"))),
+                        },
+                    )
+                )
+        claims.extend(self._extract_from_config_patterns(text, label_map))
+        return self._deduplicate(claims)
+
+    def _extract_from_config_patterns(self, text: str, label_map: dict[str, ClaimType]) -> list[Claim]:
+        claims: list[Claim] = []
+        for label, values in self._config.get("entity_patterns", {}).items():
+            claim_type = label_map.get(label)
+            if claim_type is None:
+                continue
+            for value in values:
+                pattern = re.compile(rf"\b{re.escape(value)}\b", re.IGNORECASE)
+                for match in pattern.finditer(text):
+                    claims.append(
+                        Claim(
+                            claim_type=claim_type,
+                            raw_text=match.group(0),
+                            extracted_value=match.group(0),
+                            position=(match.start(), match.end()),
+                            confidence=float(self._config.get("fallback_confidence", 0.78)),
+                            metadata={"source_pass": "spacy-pattern-fallback", "entity_label": label},
+                        )
+                    )
+        return claims
+
+    @staticmethod
+    def _deduplicate(claims: list[Claim]) -> list[Claim]:
+        seen: set[tuple[str, str, tuple[int, int]]] = set()
+        unique_claims: list[Claim] = []
+        for claim in sorted(claims, key=lambda item: item.position):
+            key = (claim.claim_type.value, claim.extracted_value.lower(), claim.position)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_claims.append(claim)
+        return unique_claims
+
+
+class BertSpanExtractor:
+    """Pass 3 extractor using token-classification with a robust heuristic fallback."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = config.get("bert", {})
+
+    @cached_property
+    def token_classifier(self) -> Any | None:
+        if pipeline is None:
+            return None
+        model_name = os.getenv(self._config.get("model_name_env", "SECURITY_BERT_MODEL_NAME"), self._config.get("model_name"))
+        try:
+            return pipeline(
+                "token-classification",
+                model=model_name,
+                aggregation_strategy=self._config.get("aggregation_strategy", "simple"),
+            )
+        except Exception:
+            return None
+
+    def extract(self, text: str) -> list[Claim]:
+        model_claims = self._extract_with_model(text)
+        fallback_claims = self._extract_with_heuristics(text)
+        return self._deduplicate(model_claims + fallback_claims)
+
+    def _extract_with_model(self, text: str) -> list[Claim]:
+        classifier = self.token_classifier
+        if classifier is None:
+            return []
+
+        claims: list[Claim] = []
+        mitigation_groups = {group.upper() for group in self._config.get("mitigation_entity_groups", ["ACTION", "MITIGATION"])}
+        urgency_groups = {group.upper() for group in self._config.get("urgency_entity_groups", ["URGENCY", "PRIORITY"])}
+        for item in classifier(text):
+            entity_group = str(item.get("entity_group", "")).upper()
+            word = str(item.get("word", "")).strip()
+            start = int(item.get("start", 0))
+            end = int(item.get("end", start + len(word)))
+            score = float(item.get("score", 0.0))
+            if entity_group in mitigation_groups:
+                claims.append(
+                    Claim(
+                        claim_type=ClaimType.MITIGATION,
+                        raw_text=word,
+                        extracted_value=word,
+                        position=(start, end),
+                        confidence=score,
+                        metadata={"source_pass": "bert", "entity_group": entity_group},
+                    )
+                )
+            if entity_group in urgency_groups:
+                claims.append(
+                    Claim(
+                        claim_type=ClaimType.URGENCY,
+                        raw_text=word,
+                        extracted_value=word,
+                        position=(start, end),
+                        confidence=score,
+                        metadata={"source_pass": "bert", "entity_group": entity_group},
+                    )
+                )
+        return claims
+
+    def _extract_with_heuristics(self, text: str) -> list[Claim]:
+        claims: list[Claim] = []
+        verb_pattern = "|".join(re.escape(verb) for verb in self._config.get("mitigation_verbs", []))
+        mitigation_regex = re.compile(
+            rf"\b(?:{verb_pattern})\b.*?(?=(?:[.!?]\s+[A-Z]|[.!?]$|\n|$))",
+            re.IGNORECASE,
+        )
+        for match in mitigation_regex.finditer(text):
+            claims.append(
+                Claim(
+                    claim_type=ClaimType.MITIGATION,
+                    raw_text=match.group(0).strip(),
+                    extracted_value=match.group(0).strip(),
+                    position=(match.start(), match.end()),
+                    confidence=float(self._config.get("mitigation_confidence", 0.74)),
+                    metadata={"source_pass": "bert-fallback"},
+                )
+            )
+
+        for keyword in self._config.get("urgency_keywords", []):
+            urgency_regex = re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
+            for match in urgency_regex.finditer(text):
+                claims.append(
+                    Claim(
+                        claim_type=ClaimType.URGENCY,
+                        raw_text=match.group(0),
+                        extracted_value=match.group(0).lower(),
+                        position=(match.start(), match.end()),
+                        confidence=float(self._config.get("urgency_confidence", 0.72)),
+                        metadata={"source_pass": "bert-fallback"},
+                    )
+                )
+        return claims
+
+    @staticmethod
+    def _deduplicate(claims: list[Claim]) -> list[Claim]:
+        seen: set[tuple[str, str, tuple[int, int]]] = set()
+        unique_claims: list[Claim] = []
+        for claim in claims:
+            key = (claim.claim_type.value, claim.extracted_value, claim.position)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_claims.append(claim)
+        return unique_claims
 
 
 class ClaimExtractor:
-    """
-    Extracts claims from unstructured LLM recommendations.
-    
-    Supports:
-    - CVE ID extraction (CVE-YYYY-NNNN format)
-    - CVSS score extraction
-    - MITRE ATT&CK technique ID extraction (TXXXX format)
-    - Severity level extraction
-    - Affected product/version extraction
-    """
-    
-    # Regex patterns for structured extraction
-    PATTERNS = {
-        "CVE_ID": re.compile(r"CVE-\d{4}-\d{4,}"),
-        "CVSS_SCORE": re.compile(r"(?:CVSS v3\.1: |CVSS: )(\d+\.\d)"),
-        "ATTACK_TECHNIQUE": re.compile(r"(?:technique |Technique )(T\d{4})"),
-        "SEVERITY_LEVEL": re.compile(r"(?:severity|Severity)[:=\s]+(?:CRITICAL|HIGH|MEDIUM|LOW|Critical|High|Medium|Low)"),
-        "VERSION": re.compile(r"(?:version |v)(\d+\.\d+(?:\.\d+)?)"),
-        "DATE": re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),
-    }
-    
-    def __init__(self):
-        """Initialize extraction models."""
-        # TODO: Load spaCy English model
-        # self.nlp = spacy.load("en_core_web_sm")
-        
-        # TODO: Load BERT tokenizer and model for span extraction
-        # self.bert_tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-        # self.bert_model = BertModel.from_pretrained("bert-base-uncased")
-        
-        pass
-    
-    def extract(self, request: ClaimRequest) -> ClaimResponse:
-        """
-        Main extraction pipeline orchestrator.
-        
-        Args:
-            request: Extraction request with text and options
-            
-        Returns:
-            ClaimResponse with extracted claims
-        """
-        start_time = datetime.now()
-        text = request.text
-        claims = []
-        
-        # Step 1: Regex-based extraction for structured patterns
-        regex_claims = self._extract_regex_patterns(text)
-        claims.extend(regex_claims)
-        
-        # Step 2: spaCy NER if enabled
-        if request.enable_ner:
-            ner_claims = self._extract_ner_entities(text)
-            claims.extend(ner_claims)
-        
-        # Step 3: BERT span extraction if enabled
-        if request.enable_span_extraction:
-            span_claims = self._extract_spans(text)
-            claims.extend(span_claims)
-        
-        # Deduplicate and normalize
-        claims = self._deduplicate_claims(claims)
-        
-        latency_ms = (datetime.now() - start_time).total_seconds() * 1000
-        
-        return ClaimResponse(
-            input_text=text,
-            claims=[self._claim_to_dict(c) for c in claims],
-            extraction_timestamp=datetime.now().isoformat(),
-            latency_ms=latency_ms,
-            model_version=request.model_version
+    """Coordinator for the three-pass extraction pipeline."""
+
+    def __init__(self) -> None:
+        self._config = load_yaml_config("config/extraction.yaml")
+        self._regex_extractor = RegexPassExtractor(self._config)
+        self._spacy_extractor = SecuritySpacyExtractor(self._config)
+        self._bert_extractor = BertSpanExtractor(self._config)
+
+    async def extract_async(
+        self,
+        text: str,
+        *,
+        enable_ner: bool = True,
+        enable_span_extraction: bool = True,
+    ) -> list[Claim]:
+        """Run all enabled extraction passes and return a deduplicated claim list."""
+        if not text.strip():
+            return []
+
+        regex_claims = await asyncio.to_thread(self._regex_extractor.extract, text)
+        spacy_claims = await asyncio.to_thread(self._spacy_extractor.extract, text) if enable_ner else []
+        bert_claims = await asyncio.to_thread(self._bert_extractor.extract, text) if enable_span_extraction else []
+        return self._deduplicate(regex_claims + spacy_claims + bert_claims)
+
+    def extract(self, payload: str | Any) -> ClaimResponse | Coroutine[Any, Any, list[Claim]]:
+        """Support both the new async text API and the legacy sync request API."""
+        if isinstance(payload, str):
+            return self.extract_async(payload)
+
+        if ClaimRequest is not None and isinstance(payload, ClaimRequest):
+            return self._extract_legacy_request(payload)
+
+        raise TypeError("ClaimExtractor.extract expects either raw text or ClaimRequest.")
+
+    def _extract_legacy_request(self, request: Any) -> ClaimResponse:
+        """Bridge the new pipeline to the repo's older ClaimRequest/ClaimResponse contract."""
+        if ClaimResponse is None:
+            raise RuntimeError("ClaimResponse model is unavailable.")
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:  # pragma: no cover - legacy path should stay sync-only
+            raise RuntimeError("Legacy ClaimRequest extraction must be called from a synchronous context.")
+
+        started = perf_counter()
+        claims = asyncio.run(
+            self.extract_async(
+                request.text,
+                enable_ner=bool(getattr(request, "enable_ner", True)),
+                enable_span_extraction=bool(getattr(request, "enable_span_extraction", True)),
+            )
         )
-    
-    def _extract_regex_patterns(self, text: str) -> List[Claim]:
-        """Extract claims using regex patterns."""
-        claims = []
-        
-        # CVE IDs
-        for match in self.PATTERNS["CVE_ID"].finditer(text):
-            claims.append(Claim(
-                claim_id=str(uuid.uuid4()),
-                text=match.group(),
-                claim_type="CVE_ID",
-                confidence=0.95,  # High confidence for regex match
-                span_start=match.start(),
-                span_end=match.end(),
-                evidence_tokens=[match.group()]
-            ))
-        
-        # CVSS Scores
-        for match in self.PATTERNS["CVSS_SCORE"].finditer(text):
-            claims.append(Claim(
-                claim_id=str(uuid.uuid4()),
-                text=match.group(),
-                claim_type="CVSS_SCORE",
-                confidence=0.90,
-                span_start=match.start(),
-                span_end=match.end(),
-                evidence_tokens=[match.group(1)]
-            ))
-        
-        # MITRE ATT&CK Techniques
-        for match in self.PATTERNS["ATTACK_TECHNIQUE"].finditer(text):
-            technique_id = match.group(1)
-            claims.append(Claim(
-                claim_id=str(uuid.uuid4()),
-                text=technique_id,
-                claim_type="ATTACK_TECHNIQUE",
-                confidence=0.92,
-                span_start=match.start(1),
-                span_end=match.end(1),
-                evidence_tokens=[technique_id]
-            ))
-        
-        # Severity levels
-        for match in self.PATTERNS["SEVERITY_LEVEL"].finditer(text):
-            claims.append(Claim(
-                claim_id=str(uuid.uuid4()),
-                text=match.group(),
-                claim_type="SEVERITY",
-                confidence=0.88,
-                span_start=match.start(),
-                span_end=match.end(),
-                evidence_tokens=[match.group()]
-            ))
-        
-        return claims
-    
-    def _extract_ner_entities(self, text: str) -> List[Claim]:
-        """
-        Extract entities using spaCy NER.
-        
-        Maps spaCy entity types to claim types.
-        """
-        claims = []
-        
-        # TODO: Process with self.nlp(text)
-        # doc = self.nlp(text)
-        # for ent in doc.ents:
-        #     if ent.label_ in ["ORG", "PRODUCT", "GPE"]:
-        #         claims.append(Claim(...))
-        
-        return claims
-    
-    def _extract_spans(self, text: str) -> List[Claim]:
-        """
-        Extract semantic claim spans using BERT.
-        
-        Identifies sentence fragments most likely to contain claims.
-        """
-        claims = []
-        
-        # TODO: Tokenize with BERT
-        # TODO: Compute span embeddings
-        # TODO: Identify high-confidence claim boundaries
-        
-        return claims
-    
-    def _deduplicate_claims(self, claims: List[Claim]) -> List[Claim]:
-        """Remove duplicate claims and keep highest confidence version."""
-        seen = {}
-        for claim in sorted(claims, key=lambda c: c.confidence, reverse=True):
-            key = (claim.claim_type, claim.text.lower())
-            if key not in seen:
-                seen[key] = claim
-        return list(seen.values())
-    
-    def _claim_to_dict(self, claim: Claim) -> dict:
-        """Convert Claim dataclass to dictionary for JSON response."""
-        return {
-            "claim_id": claim.claim_id,
-            "text": claim.text,
-            "claim_type": claim.claim_type,
-            "confidence": claim.confidence,
-            "span_start": claim.span_start,
-            "span_end": claim.span_end,
-            "evidence_tokens": claim.evidence_tokens
+        latency_ms = round((perf_counter() - started) * 1000, 3)
+        return ClaimResponse(
+            input_text=request.text,
+            claims=[self._to_legacy_claim_dict(claim) for claim in claims],
+            extraction_timestamp=datetime.now(timezone.utc).isoformat(),
+            latency_ms=latency_ms,
+            model_version=str(getattr(request, "model_version", "v1")),
+        )
+
+    @staticmethod
+    def _deduplicate(claims: list[Claim]) -> list[Claim]:
+        merged: dict[tuple[str, str, tuple[int, int]], Claim] = {}
+        for claim in claims:
+            key = (claim.claim_type.value, claim.extracted_value, claim.position)
+            existing = merged.get(key)
+            if existing is None or claim.confidence > existing.confidence:
+                merged[key] = claim
+        return sorted(merged.values(), key=lambda claim: claim.position)
+
+    @staticmethod
+    def _to_legacy_claim_dict(claim: Claim) -> dict[str, Any]:
+        claim_type_map = {
+            ClaimType.CVE: "CVE_ID",
+            ClaimType.ATTACK_ID: "ATTACK_TECHNIQUE",
+            ClaimType.CVSS: "CVSS_SCORE",
+            ClaimType.PRODUCT: "PRODUCT",
+            ClaimType.VERSION: "VERSION",
+            ClaimType.SEVERITY: "SEVERITY",
+            ClaimType.MITIGATION: "REMEDIATION",
+            ClaimType.URGENCY: "URGENCY",
         }
-    
-    async def extract_async(self, request: ClaimRequest) -> ClaimResponse:
-        """Async version of extract for FastAPI integration."""
-        # TODO: Run extraction in thread pool if models are not async
-        return self.extract(request)
+        return {
+            "claim_type": claim_type_map.get(claim.claim_type, claim.claim_type.value.upper()),
+            "text": claim.raw_text,
+            "extracted_value": claim.extracted_value,
+            "confidence": claim.confidence,
+            "span_start": claim.position[0],
+            "span_end": claim.position[1],
+            "evidence_tokens": [claim.extracted_value],
+        }
 
 
-# Singleton instance
-_extractor = None
-
-
-def get_extractor() -> ClaimExtractor:
-    """Get or create singleton ClaimExtractor instance."""
-    global _extractor
-    if _extractor is None:
-        _extractor = ClaimExtractor()
-    return _extractor
+async def extract_claims(text: str) -> list[Claim]:
+    """Convenience async function for extracting claims from free text."""
+    extractor = ClaimExtractor()
+    return await extractor.extract_async(text)

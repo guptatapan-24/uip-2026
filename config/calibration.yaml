@@ -1,0 +1,16 @@
+semantic_threshold_calibration:
+  threshold_candidates:
+    - 0.50
+    - 0.55
+    - 0.60
+    - 0.65
+    - 0.68
+    - 0.70
+    - 0.72
+    - 0.74
+    - 0.76
+    - 0.78
+    - 0.80
+    - 0.85
+  target_threshold: 0.72
+  objective: "f1"
