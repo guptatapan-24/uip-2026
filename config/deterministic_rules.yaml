@@ -1,0 +1,30 @@
+deterministic:
+  cvss_tolerance: 0.3
+  pass_confidence: 0.96
+  fail_confidence: 0.95
+  supported_rule_ids:
+    - "cve_exists_in_nvd"
+    - "cvss_score_in_range"
+    - "attack_id_valid"
+    - "version_in_affected_range"
+    - "mitigation_maps_to_attack"
+  wildcard_versions:
+    - "*"
+    - "-"
+  cpe_version_index: 5
+  mitigation_overlap_threshold: 0.25
+  mitigation_mappings:
+    T1110:
+      - "rotate credentials"
+      - "enforce multifactor authentication"
+      - "patch exposed outlook systems"
+      - "reset compromised passwords"
+    T1190:
+      - "upgrade apache log4j"
+      - "patch public-facing applications"
+      - "restrict public-facing access"
+      - "apply vendor hotfix"
+    T1078:
+      - "revoke stolen tokens"
+      - "rotate access keys"
+      - "quarantine compromised accounts"

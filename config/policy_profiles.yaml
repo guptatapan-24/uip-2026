@@ -1,0 +1,42 @@
+profiles:
+  default:
+    weights:
+      cve_validity: 0.4
+      severity_accuracy: 0.3
+      mitigation_relevance: 0.2
+      urgency_consistency: 0.1
+    thresholds:
+      allow_min: 0.85
+      flag_min: 0.60
+    hard_fail_rule_ids:
+      - "cve_exists_in_nvd"
+    signal_defaults:
+      cve_validity: 0.5
+      severity_accuracy: 0.5
+      mitigation_relevance: 0.5
+      urgency_consistency: 0.5
+    semantic_threshold: 0.72
+    correction:
+      min_candidate_score: 0.55
+      max_candidates: 3
+  strict:
+    weights:
+      cve_validity: 0.45
+      severity_accuracy: 0.25
+      mitigation_relevance: 0.2
+      urgency_consistency: 0.1
+    thresholds:
+      allow_min: 0.9
+      flag_min: 0.7
+    hard_fail_rule_ids:
+      - "cve_exists_in_nvd"
+      - "attack_id_valid"
+    signal_defaults:
+      cve_validity: 0.45
+      severity_accuracy: 0.45
+      mitigation_relevance: 0.45
+      urgency_consistency: 0.45
+    semantic_threshold: 0.78
+    correction:
+      min_candidate_score: 0.6
+      max_candidates: 2

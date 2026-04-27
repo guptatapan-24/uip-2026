@@ -1,0 +1,197 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: llm-firewall-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-llm_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-llm_secure_pwd}
+      POSTGRES_DB: ${DB_NAME:-llm_firewall}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llm_user -d llm_firewall"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+  # Redis Cache & Task Broker
+  redis:
+    image: redis:7-alpine
+    container_name: llm-firewall-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+  # Ollama Self-Hosted LLM
+  ollama:
+    image: ollama/ollama:latest
+    container_name: llm-firewall-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    environment:
+      - OLLAMA_MODELS=/root/.ollama/models
+    volumes:
+      - ollama_models:/root/.ollama/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+  # FastAPI Gateway
+  api_gateway:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: llm-firewall-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-llm_user}:${DB_PASSWORD:-llm_secure_pwd}@postgres:5432/${DB_NAME:-llm_firewall}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_CELERY_BROKER: redis://redis:6379/1
+      REDIS_RESULT_BACKEND: redis://redis:6379/2
+      OLLAMA_BASE_URL: http://ollama:11434
+      JWT_ALGORITHM: RS256
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+      NVD_API_KEY: ${NVD_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-2}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../services:/app/services
+      - ../db:/app/db
+      - ../tests:/app/tests
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+  # Prometheus Metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: llm-firewall-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+  # Grafana Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: llm-firewall-grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD_RESET_LINK_ENABLED: "false"
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+  # React Dashboard
+  dashboard:
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
+    container_name: llm-firewall-dashboard
+    depends_on:
+      - api_gateway
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      REACT_APP_WS_URL: ws://localhost:8000/ws
+    ports:
+      - "3001:3000"
+    volumes:
+      - ../dashboard/src:/app/src
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+  # Celery Worker (Optional)
+  celery_worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    container_name: llm-firewall-celery
+    depends_on:
+      - redis
+      - api_gateway
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-llm_user}:${DB_PASSWORD:-llm_secure_pwd}@postgres:5432/${DB_NAME:-llm_firewall}
+      REDIS_URL: redis://redis:6379/0
+      REDIS_CELERY_BROKER: redis://redis:6379/1
+      REDIS_RESULT_BACKEND: redis://redis:6379/2
+      OLLAMA_BASE_URL: http://ollama:11434
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: celery -A services.rag_pipeline.sync_jobs worker -l info
+    networks:
+      - llm-firewall-net
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ollama_models:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  llm-firewall-net:
+    driver: bridge

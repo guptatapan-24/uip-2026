@@ -1,0 +1,3 @@
+{"text":"Patch Microsoft Outlook 16.0.1 immediately for this critical CVE.","entities":[{"start":6,"end":23,"label":"PRODUCT"},{"start":24,"end":30,"label":"VERSION"},{"start":52,"end":60,"label":"SEVERITY"}]}
+{"text":"Apache Log4j 2.14.1 is a high risk component in this alert.","entities":[{"start":0,"end":13,"label":"PRODUCT"},{"start":14,"end":20,"label":"VERSION"},{"start":26,"end":30,"label":"SEVERITY"}]}
+{"text":"Cisco ASA 9.8.1 requires a medium-priority remediation.","entities":[{"start":0,"end":9,"label":"PRODUCT"},{"start":10,"end":15,"label":"VERSION"},{"start":27,"end":33,"label":"SEVERITY"}]}

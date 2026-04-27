@@ -1,0 +1,64 @@
+# services/decision_engine/policy_profiles.yaml
+# Decision policy profiles for risk score thresholds and component weights
+#
+# Profiles define:
+# - thresholds: risk_score boundaries for ALLOW | FLAG | BLOCK outcomes
+# - rule_weights: weights for risk score component calculation
+# - active: whether profile is enabled
+
+profiles:
+  default:
+    name: "default"
+    description: "Standard SOC policy with balanced thresholds"
+    active: true
+    thresholds:
+      allow_min: 0.85
+      flag_min: 0.60
+      block_max: 0.59
+    rule_weights:
+      cve_validity: 0.40
+      severity_accuracy: 0.30
+      mitigation_relevance: 0.20
+      urgency_consistency: 0.10
+
+  aggressive:
+    name: "aggressive"
+    description: "Strict policy for high-security environments (NFI, Defense)"
+    active: true
+    thresholds:
+      allow_min: 0.90
+      flag_min: 0.70
+      block_max: 0.69
+    rule_weights:
+      cve_validity: 0.50
+      severity_accuracy: 0.30
+      mitigation_relevance: 0.15
+      urgency_consistency: 0.05
+
+  lenient:
+    name: "lenient"
+    description: "Permissive policy for development/testing environments"
+    active: true
+    thresholds:
+      allow_min: 0.75
+      flag_min: 0.45
+      block_max: 0.44
+    rule_weights:
+      cve_validity: 0.30
+      severity_accuracy: 0.30
+      mitigation_relevance: 0.25
+      urgency_consistency: 0.15
+
+  critical_response:
+    name: "critical_response"
+    description: "Policy during active security incident response"
+    active: true
+    thresholds:
+      allow_min: 0.80
+      flag_min: 0.55
+      block_max: 0.54
+    rule_weights:
+      cve_validity: 0.35
+      severity_accuracy: 0.35
+      mitigation_relevance: 0.20
+      urgency_consistency: 0.10
