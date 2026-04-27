@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 
 import httpx
 import redis.asyncio as aioredis
+from pydantic import BaseModel
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -62,6 +63,17 @@ class NVDAPIError(NVDClientError):
     pass
 
 
+class CVERecord(BaseModel):
+    """Pydantic model for CVE data."""
+    cve_id: str
+    description: str
+    cvss_v3_score: Optional[float] = None
+    cvss_v3_vector: Optional[str] = None
+    affected_products: List[str] = []
+    published_date: str = ""
+    last_modified_date: str = ""
+
+
 class NVDClient:
     """
     Async client for NVD REST API v2 with caching and retry logic.
@@ -95,6 +107,12 @@ class NVDClient:
         self.timeout = timeout
         self.redis_client: Optional[aioredis.Redis] = None
         self.http_client: Optional[httpx.AsyncClient] = None
+        self.base_url = NVD_API_BASE_URL
+        self.timeout_seconds = timeout
+        self.MAX_RETRIES = MAX_RETRIES
+        self.BACKOFF_BASE = INITIAL_BACKOFF
+        self.CACHE_TTL_SECONDS = CVE_CACHE_TTL
+        self.redis_url = f"redis://{redis_host}:{redis_port}/{redis_db}"
         logger.info(
             "NVDClient initialized with timeout=%ds, redis=%s:%d",
             timeout,
