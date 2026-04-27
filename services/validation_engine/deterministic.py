@@ -8,7 +8,6 @@ from typing import Any
 from services.common.config import load_yaml_config
 from services.common.models import RuleResult, RuleSignal
 
-
 _CONFIG = load_yaml_config("config/deterministic_rules.yaml").get("deterministic", {})
 
 
@@ -37,10 +36,16 @@ def cvss_score_in_range(claimed_score: float, nvd_score: float) -> RuleResult:
         rule_id="cvss_score_in_range",
         passed=passed,
         evidence=f"Claimed CVSS {claimed_score:.1f}, authoritative CVSS {nvd_score:.1f}, delta {delta:.1f}.",
-        confidence=_confidence_for(passed, proximity=max(0.0, 1.0 - (delta / max(tolerance, 0.001)))),
+        confidence=_confidence_for(
+            passed, proximity=max(0.0, 1.0 - (delta / max(tolerance, 0.001)))
+        ),
         signal=RuleSignal.SEVERITY_ACCURACY,
         correction_candidates=[f"{nvd_score:.1f}"] if not passed else [],
-        metadata={"claimed_score": claimed_score, "nvd_score": nvd_score, "delta": round(delta, 3)},
+        metadata={
+            "claimed_score": claimed_score,
+            "nvd_score": nvd_score,
+            "delta": round(delta, 3),
+        },
     )
 
 
@@ -66,7 +71,9 @@ def attack_id_valid(technique_id: str, attack_data: dict[str, Any]) -> RuleResul
     )
 
 
-def version_in_affected_range(version: str, cpe_list: list[str | dict[str, Any]]) -> RuleResult:
+def version_in_affected_range(
+    version: str, cpe_list: list[str | dict[str, Any]]
+) -> RuleResult:
     """Validate whether a version falls in any affected CPE range."""
     version_key = _version_key(version)
     wildcard_versions = set(_CONFIG.get("wildcard_versions", ["*", "-"]))
@@ -92,8 +99,16 @@ def version_in_affected_range(version: str, cpe_list: list[str | dict[str, Any]]
         evidence=evidence,
         confidence=_confidence_for(passed),
         signal=RuleSignal.CVE_VALIDITY,
-        correction_candidates=[_stringify_cpe(candidate) for candidate in cpe_list[:2]] if not passed else [],
-        metadata={"matched_entry": _stringify_cpe(matched_entry) if matched_entry is not None else None},
+        correction_candidates=(
+            [_stringify_cpe(candidate) for candidate in cpe_list[:2]]
+            if not passed
+            else []
+        ),
+        metadata={
+            "matched_entry": (
+                _stringify_cpe(matched_entry) if matched_entry is not None else None
+            )
+        },
     )
 
 
@@ -104,22 +119,27 @@ def mitigation_maps_to_attack(
 ) -> RuleResult:
     """Validate whether a mitigation aligns with the ATT&CK technique's approved mitigation patterns."""
     configured_mappings = _CONFIG.get("mitigation_mappings", {})
-    known_mitigations = (mapping_data or configured_mappings).get(technique_id.upper(), [])
+    known_mitigations = (mapping_data or configured_mappings).get(
+        technique_id.upper(), []
+    )
     overlap_threshold = float(_CONFIG.get("mitigation_overlap_threshold", 0.25))
     mitigation_tokens = _normalise_text_tokens(mitigation_text)
 
     best_match = ""
     best_overlap = 0.0
     for known_mitigation in known_mitigations:
-        overlap = _token_overlap(mitigation_tokens, _normalise_text_tokens(known_mitigation))
+        overlap = _token_overlap(
+            mitigation_tokens, _normalise_text_tokens(known_mitigation)
+        )
         if overlap > best_overlap:
             best_overlap = overlap
             best_match = known_mitigation
 
     passed = bool(known_mitigations) and best_overlap >= overlap_threshold
-    evidence = (
-        f"Mitigation overlap for {technique_id} is {best_overlap:.2f}"
-        + (f" against '{best_match}'." if best_match else " with no mapped mitigation match.")
+    evidence = f"Mitigation overlap for {technique_id} is {best_overlap:.2f}" + (
+        f" against '{best_match}'."
+        if best_match
+        else " with no mapped mitigation match."
     )
     return RuleResult(
         rule_id="mitigation_maps_to_attack",
@@ -135,7 +155,9 @@ def mitigation_maps_to_attack(
 class DeterministicValidator:
     """Compatibility wrapper that applies the deterministic rules over legacy claim payloads."""
 
-    async def validate(self, claims: list[dict[str, Any]], threat_intel: dict[str, Any]) -> list[RuleResult]:
+    async def validate(
+        self, claims: list[dict[str, Any]], threat_intel: dict[str, Any]
+    ) -> list[RuleResult]:
         """Validate legacy claim dictionaries against the supplied threat-intel payload."""
         results: list[RuleResult] = []
         for claim in claims:
@@ -151,7 +173,9 @@ class DeterministicValidator:
             if claim_type in {"CVSS_SCORE", "CVSS"}:
                 authoritative_score = _extract_authoritative_cvss(threat_intel)
                 if authoritative_score is not None:
-                    results.append(cvss_score_in_range(float(text), authoritative_score))
+                    results.append(
+                        cvss_score_in_range(float(text), authoritative_score)
+                    )
                 continue
 
             if claim_type in {"ATTACK_TECHNIQUE", "ATTACK_ID"}:
@@ -167,7 +191,11 @@ class DeterministicValidator:
 
 
 def _confidence_for(passed: bool, proximity: float | None = None) -> float:
-    base = float(_CONFIG.get("pass_confidence" if passed else "fail_confidence", 0.96 if passed else 0.95))
+    base = float(
+        _CONFIG.get(
+            "pass_confidence" if passed else "fail_confidence", 0.96 if passed else 0.95
+        )
+    )
     if proximity is None:
         return round(base, 2)
     adjusted = 0.5 * base + 0.5 * (proximity if passed else 1.0 - proximity)
@@ -198,7 +226,9 @@ def _normalise_attack_ids(attack_data: dict[str, Any]) -> set[str]:
     techniques = attack_data.get("objects", [])
     known_ids: set[str] = set()
     for item in techniques:
-        external_refs = item.get("external_references", []) if isinstance(item, dict) else []
+        external_refs = (
+            item.get("external_references", []) if isinstance(item, dict) else []
+        )
         for ref in external_refs:
             external_id = ref.get("external_id")
             if external_id:
@@ -208,7 +238,12 @@ def _normalise_attack_ids(attack_data: dict[str, Any]) -> set[str]:
 
 def _extract_cpe_version(cpe: str | dict[str, Any]) -> str | None:
     if isinstance(cpe, dict):
-        return str(cpe.get("version") or cpe.get("versionStartIncluding") or cpe.get("versionEndIncluding") or "")
+        return str(
+            cpe.get("version")
+            or cpe.get("versionStartIncluding")
+            or cpe.get("versionEndIncluding")
+            or ""
+        )
     parts = cpe.split(":")
     index = int(_CONFIG.get("cpe_version_index", 5))
     return parts[index] if len(parts) > index else None

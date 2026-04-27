@@ -21,17 +21,17 @@ import hashlib
 import json
 import logging
 import time
-from typing import Any, Dict, Optional, List
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
 import httpx
 import redis.asyncio as aioredis
 from pydantic import BaseModel
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,21 +50,25 @@ INITIAL_BACKOFF = 1  # seconds
 
 class NVDClientError(Exception):
     """Base exception for NVD client operations."""
+
     pass
 
 
 class NVDCacheError(NVDClientError):
     """Exception raised for cache-related operations."""
+
     pass
 
 
 class NVDAPIError(NVDClientError):
     """Exception raised for NVD API-related operations."""
+
     pass
 
 
 class CVERecord(BaseModel):
     """Pydantic model for CVE data."""
+
     cve_id: str
     description: str
     cvss_v3_score: Optional[float] = None
@@ -77,7 +81,7 @@ class CVERecord(BaseModel):
 class NVDClient:
     """
     Async client for NVD REST API v2 with caching and retry logic.
-    
+
     This class manages connections to the NVD API and provides methods to fetch
     CVE data with automatic retry, caching, and error handling.
     """
@@ -92,7 +96,7 @@ class NVDClient:
     ):
         """
         Initialize NVD client with API key and Redis configuration.
-        
+
         Args:
             api_key: NVD API key for rate limiting benefits
             redis_host: Redis server hostname
@@ -119,7 +123,7 @@ class NVDClient:
             redis_host,
             redis_port,
         )
-    
+
     async def connect(self):
         """Initialize Redis connection."""
         try:
@@ -127,19 +131,19 @@ class NVDClient:
         except Exception as e:
             print(f"Warning: Could not connect to Redis: {e}")
             self.redis_client = None
-    
+
     async def disconnect(self):
         """Close Redis connection."""
         if self.redis_client:
             await self.redis_client.close()
-    
+
     async def get_cve(self, cve_id: str) -> Optional[CVERecord]:
         """
         Fetch CVE details by ID with caching.
-        
+
         Args:
             cve_id: CVE ID in format "CVE-YYYY-NNNN"
-            
+
         Returns:
             CVERecord if found, None otherwise
         """
@@ -147,91 +151,91 @@ class NVDClient:
         cached = await self._get_cache(cve_id)
         if cached:
             return CVERecord(**json.loads(cached))
-        
+
         # Fetch from API with retry
         cve_data = await self._fetch_with_retry(cve_id)
-        
+
         if cve_data:
             record = self._parse_cve_response(cve_data)
             # Cache the result
             await self._set_cache(cve_id, record.model_dump_json())
             return record
-        
+
         return None
-    
+
     async def get_cves_batch(self, cve_ids: list) -> Dict[str, Optional[CVERecord]]:
         """
         Fetch multiple CVEs in parallel.
-        
+
         Args:
             cve_ids: List of CVE IDs
-            
+
         Returns:
             Dictionary mapping CVE ID to CVERecord
         """
         tasks = [self.get_cve(cve_id) for cve_id in cve_ids]
         results = await asyncio.gather(*tasks)
         return {cve_id: result for cve_id, result in zip(cve_ids, results)}
-    
+
     async def _fetch_with_retry(self, cve_id: str) -> Optional[Dict[str, Any]]:
         """
         Fetch CVE from API with exponential backoff retry.
-        
+
         Args:
             cve_id: CVE ID
-            
+
         Returns:
             JSON response if successful, None if all retries exhausted
         """
         url = f"{self.base_url}/{cve_id}"
         headers = {"apiKey": self.api_key} if self.api_key else {}
-        
+
         for attempt in range(self.MAX_RETRIES):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                     response = await client.get(url, headers=headers)
                     response.raise_for_status()
                     return response.json()
-            
+
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429:  # Rate limited
-                    wait_time = self.BACKOFF_BASE ** attempt
+                    wait_time = self.BACKOFF_BASE**attempt
                     print(f"Rate limited. Waiting {wait_time}s before retry...")
                     await asyncio.sleep(wait_time)
                 elif e.response.status_code == 404:
                     return None  # CVE not found
                 else:
                     if attempt < self.MAX_RETRIES - 1:
-                        await asyncio.sleep(self.BACKOFF_BASE ** attempt)
+                        await asyncio.sleep(self.BACKOFF_BASE**attempt)
                     else:
                         raise
-            
+
             except httpx.RequestError as e:
                 if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(self.BACKOFF_BASE ** attempt)
+                    await asyncio.sleep(self.BACKOFF_BASE**attempt)
                 else:
                     print(f"NVD API error after {self.MAX_RETRIES} retries: {e}")
                     return None
-        
+
         return None
-    
+
     def _parse_cve_response(self, data: Dict[str, Any]) -> CVERecord:
         """Parse NVD API response into CVERecord."""
         vulnerabilities = data.get("vulnerabilities", [])
         if not vulnerabilities:
             return None
-        
+
         cve = vulnerabilities[0].get("cve", {})
         metrics = cve.get("metrics", {})
         cvss_v3 = metrics.get("cvssV3", {}).get("0", {})
-        
+
         affected_products = []
         for config in cve.get("configurations", []):
             for node in config.get("nodes", []):
                 for cpe_match in node.get("cpeMatch", []):
                     if "cpe23Uri" in cpe_match:
                         affected_products.append(cpe_match["cpe23Uri"])
-        
+
         return CVERecord(
             cve_id=cve.get("id", ""),
             description=cve.get("descriptions", [{}])[0].get("value", ""),
@@ -239,9 +243,9 @@ class NVDClient:
             cvss_v3_vector=cvss_v3.get("cvssData", {}).get("vectorString"),
             affected_products=affected_products,
             published_date=cve.get("published", ""),
-            last_modified_date=cve.get("lastModified", "")
+            last_modified_date=cve.get("lastModified", ""),
         )
-    
+
     async def _get_cache(self, key: str) -> Optional[str]:
         """Get value from Redis cache."""
         if not self.redis_client:
@@ -250,7 +254,7 @@ class NVDClient:
             return await self.redis_client.get(f"nvd:{key}")
         except Exception:
             return None
-    
+
     async def _set_cache(self, key: str, value: str):
         """Set value in Redis cache with TTL."""
         if not self.redis_client:

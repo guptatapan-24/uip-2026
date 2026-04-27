@@ -10,14 +10,16 @@ Usage:
   alembic downgrade -1
 """
 
-from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
-from alembic import context
+import os
 
 # Import ORM models
 import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import engine_from_config, pool
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from db.orm import Base
 
 config = context.config
@@ -45,8 +47,7 @@ def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     configuration = config.get_section(config.config_ini_section)
     configuration["sqlalchemy.url"] = os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://llm_user:password@localhost/llm_firewall"
+        "DATABASE_URL", "postgresql+asyncpg://llm_user:password@localhost/llm_firewall"
     )
 
     connectable = engine_from_config(
@@ -56,10 +57,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()

@@ -27,7 +27,9 @@ from services.validation_engine.deterministic import (
 from services.validation_engine.semantic import SemanticScorer
 
 
-def load_benchmark_cases(relative_path: str = "tests/fixtures/hallucination_benchmark.json") -> list[BenchmarkCase]:
+def load_benchmark_cases(
+    relative_path: str = "tests/fixtures/hallucination_benchmark.json",
+) -> list[BenchmarkCase]:
     """Load the synthetic hallucination benchmark dataset."""
     payload = json.loads((ROOT_DIR / relative_path).read_text(encoding="utf-8"))
     return [BenchmarkCase.model_validate(item) for item in payload]
@@ -49,7 +51,9 @@ async def run_ablation_suite(profile_name: str = "default") -> list[BenchmarkSum
     for scenario_name, options in scenarios:
         results: list[BenchmarkRunResult] = []
         for case in cases:
-            results.append(await _evaluate_case(case, profile_name=profile_name, **options))
+            results.append(
+                await _evaluate_case(case, profile_name=profile_name, **options)
+            )
         summaries.append(_summarise_results(scenario_name, results))
     return summaries
 
@@ -81,13 +85,23 @@ async def _evaluate_case(
 
     if not disable_deterministic:
         if validation.cve_id:
-            rule_results.append(cve_exists_in_nvd(validation.cve_id, {"cves": validation.known_cves}))
+            rule_results.append(
+                cve_exists_in_nvd(validation.cve_id, {"cves": validation.known_cves})
+            )
         if validation.claimed_cvss is not None and validation.nvd_cvss is not None:
-            rule_results.append(cvss_score_in_range(validation.claimed_cvss, validation.nvd_cvss))
+            rule_results.append(
+                cvss_score_in_range(validation.claimed_cvss, validation.nvd_cvss)
+            )
         if validation.technique_id:
-            rule_results.append(attack_id_valid(validation.technique_id, {"techniques": validation.known_attack_ids}))
+            rule_results.append(
+                attack_id_valid(
+                    validation.technique_id, {"techniques": validation.known_attack_ids}
+                )
+            )
         if validation.version and validation.cpe_list:
-            rule_results.append(version_in_affected_range(validation.version, validation.cpe_list))
+            rule_results.append(
+                version_in_affected_range(validation.version, validation.cpe_list)
+            )
         if validation.mitigation_text and validation.technique_id:
             rule_results.append(
                 mitigation_maps_to_attack(
@@ -107,7 +121,11 @@ async def _evaluate_case(
                 rule_id="semantic_mitigation_relevance",
                 passed=semantic_result.passed,
                 evidence=f"Semantic similarity {semantic_result.similarity:.2f} vs threshold {semantic_result.threshold:.2f}.",
-                confidence=semantic_result.similarity if semantic_result.passed else 1.0 - semantic_result.similarity,
+                confidence=(
+                    semantic_result.similarity
+                    if semantic_result.passed
+                    else 1.0 - semantic_result.similarity
+                ),
                 signal=RuleSignal.MITIGATION_RELEVANCE,
             )
         )
@@ -116,7 +134,10 @@ async def _evaluate_case(
         rule_results.append(_urgency_rule(validation))
 
     if disable_correction:
-        rule_results = [result.model_copy(update={"correction_candidates": []}) for result in rule_results]
+        rule_results = [
+            result.model_copy(update={"correction_candidates": []})
+            for result in rule_results
+        ]
 
     decision = await decide(rule_results, profile_name=profile_name)
     return BenchmarkRunResult(
@@ -142,22 +163,36 @@ def _urgency_rule(validation: BenchmarkValidationInput) -> RuleResult:
     )
 
 
-def _extraction_recall(extracted_claims: list, expected_claim_types: list[ClaimType]) -> float:
+def _extraction_recall(
+    extracted_claims: list, expected_claim_types: list[ClaimType]
+) -> float:
     if not expected_claim_types:
         return 1.0
     extracted_types = {claim.claim_type for claim in extracted_claims}
-    matched = sum(1 for claim_type in expected_claim_types if claim_type in extracted_types)
+    matched = sum(
+        1 for claim_type in expected_claim_types if claim_type in extracted_types
+    )
     return round(matched / len(expected_claim_types), 4)
 
 
-def _summarise_results(scenario_name: str, results: list[BenchmarkRunResult]) -> BenchmarkSummary:
+def _summarise_results(
+    scenario_name: str, results: list[BenchmarkRunResult]
+) -> BenchmarkSummary:
     hallucinated = [result for result in results if result.hallucinated]
     benign = [result for result in results if not result.hallucinated]
     caught = [result for result in hallucinated if result.actual_outcome != "ALLOW"]
-    false_approvals = [result for result in hallucinated if result.actual_outcome == "ALLOW"]
-    false_blocks = [result for result in benign if result.actual_outcome in {"BLOCK", "CORRECT"}]
-    consistent = [result for result in results if result.actual_outcome == result.expected_outcome]
-    extraction_recall = sum(result.extraction_recall for result in results) / max(1, len(results))
+    false_approvals = [
+        result for result in hallucinated if result.actual_outcome == "ALLOW"
+    ]
+    false_blocks = [
+        result for result in benign if result.actual_outcome in {"BLOCK", "CORRECT"}
+    ]
+    consistent = [
+        result for result in results if result.actual_outcome == result.expected_outcome
+    ]
+    extraction_recall = sum(result.extraction_recall for result in results) / max(
+        1, len(results)
+    )
 
     return BenchmarkSummary(
         scenario_name=scenario_name,

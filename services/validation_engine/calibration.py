@@ -11,7 +11,9 @@ from services.common.models import CalibrationPair, CalibrationReport, Threshold
 from services.validation_engine.semantic import SemanticScorer
 
 
-def load_calibration_pairs(relative_path: str = "tests/fixtures/semantic_pairs.json") -> list[CalibrationPair]:
+def load_calibration_pairs(
+    relative_path: str = "tests/fixtures/semantic_pairs.json",
+) -> list[CalibrationPair]:
     """Load labeled mitigation relevance pairs for threshold calibration."""
     resolved = ROOT_DIR / relative_path
     payload = json.loads(resolved.read_text(encoding="utf-8"))
@@ -23,8 +25,12 @@ async def calibrate_semantic_threshold(
     profile_name: str = "default",
 ) -> CalibrationReport:
     """Sweep threshold candidates and choose the best operating point for the configured objective."""
-    calibration_cfg = load_yaml_config("config/calibration.yaml").get("semantic_threshold_calibration", {})
-    threshold_candidates = [float(value) for value in calibration_cfg.get("threshold_candidates", [0.72])]
+    calibration_cfg = load_yaml_config("config/calibration.yaml").get(
+        "semantic_threshold_calibration", {}
+    )
+    threshold_candidates = [
+        float(value) for value in calibration_cfg.get("threshold_candidates", [0.72])
+    ]
     target_threshold = float(calibration_cfg.get("target_threshold", 0.72))
     objective = str(calibration_cfg.get("objective", "f1"))
 
@@ -32,7 +38,10 @@ async def calibrate_semantic_threshold(
     dataset = pairs or load_calibration_pairs()
     similarities = await _score_pairs(scorer, dataset)
 
-    metrics = [_metrics_for_threshold(threshold, similarities) for threshold in threshold_candidates]
+    metrics = [
+        _metrics_for_threshold(threshold, similarities)
+        for threshold in threshold_candidates
+    ]
     selected = max(
         metrics,
         key=lambda metric: (
@@ -61,7 +70,9 @@ async def _score_pairs(
     return similarities
 
 
-def _metrics_for_threshold(threshold: float, similarities: list[tuple[bool, float]]) -> ThresholdMetrics:
+def _metrics_for_threshold(
+    threshold: float, similarities: list[tuple[bool, float]]
+) -> ThresholdMetrics:
     tp = tn = fp = fn = 0
     for label, similarity in similarities:
         predicted = similarity >= threshold
@@ -77,7 +88,11 @@ def _metrics_for_threshold(threshold: float, similarities: list[tuple[bool, floa
     total = max(1, tp + tn + fp + fn)
     precision = tp / max(1, tp + fp)
     recall = tp / max(1, tp + fn)
-    f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
+    f1 = (
+        0.0
+        if precision + recall == 0
+        else 2 * precision * recall / (precision + recall)
+    )
     accuracy = (tp + tn) / total
     return ThresholdMetrics(
         threshold=round(threshold, 2),

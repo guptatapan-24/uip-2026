@@ -18,22 +18,36 @@ TODO: Wire Tanushree's, Tapan's, and Dhruv's modules to use these models
 
 import uuid
 from datetime import datetime
-from typing import Optional, List
+from typing import List, Optional
 
-from sqlalchemy import Column, String, Float, Boolean, DateTime, Integer, JSONB, UUID, ForeignKey, Index
+from sqlalchemy import (
+    JSONB,
+    UUID,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+)
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
 Base = declarative_base()
 
 
 class Claim(Base):
     """Extracted claim from LLM output."""
+
     __tablename__ = "claims"
-    
+
     id = Column(Integer, primary_key=True)
-    claim_id = Column(PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4, nullable=False)
+    claim_id = Column(
+        PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4, nullable=False
+    )
     text = Column(String, nullable=False)
     claim_type = Column(String(50), index=True)
     confidence = Column(Float, nullable=False)
@@ -42,10 +56,13 @@ class Claim(Base):
 
 class ValidationResult(Base):
     """Single validation rule outcome."""
+
     __tablename__ = "validation_results"
-    
+
     id = Column(Integer, primary_key=True)
-    validation_result_id = Column(PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4)
+    validation_result_id = Column(
+        PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4
+    )
     decision_id = Column(PG_UUID(as_uuid=True), index=True, nullable=False)
     rule_id = Column(String(100), index=True)
     rule_name = Column(String(255))
@@ -57,10 +74,13 @@ class ValidationResult(Base):
 
 class Decision(Base):
     """Final validation decision."""
+
     __tablename__ = "decisions"
-    
+
     id = Column(Integer, primary_key=True)
-    decision_id = Column(PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4, nullable=False)
+    decision_id = Column(
+        PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4, nullable=False
+    )
     alert_id = Column(String(255), index=True)
     llm_output = Column(String)
     outcome = Column(String(20), index=True)  # ALLOW | FLAG | BLOCK | CORRECT
@@ -76,8 +96,9 @@ class Decision(Base):
 
 class AuditLogEntry(Base):
     """Hash-chained audit log entry."""
+
     __tablename__ = "audit_log"
-    
+
     id = Column(Integer, primary_key=True)
     decision_id = Column(PG_UUID(as_uuid=True), index=True, nullable=False)
     record_data = Column(JSONB)
@@ -88,8 +109,9 @@ class AuditLogEntry(Base):
 
 class AnalystOverride(Base):
     """SOC_ADMIN decision override."""
+
     __tablename__ = "analyst_overrides"
-    
+
     id = Column(Integer, primary_key=True)
     override_id = Column(PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4)
     decision_id = Column(PG_UUID(as_uuid=True), index=True, nullable=False)
@@ -104,8 +126,9 @@ class AnalystOverride(Base):
 
 class PolicyProfile(Base):
     """Decision policy configuration."""
+
     __tablename__ = "policy_profiles"
-    
+
     id = Column(Integer, primary_key=True)
     profile_id = Column(PG_UUID(as_uuid=True), unique=True, default=uuid.uuid4)
     name = Column(String(100), unique=True, index=True, nullable=False)
@@ -119,8 +142,9 @@ class PolicyProfile(Base):
 
 class User(Base):
     """RBAC user account."""
+
     __tablename__ = "users"
-    
+
     id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username = Column(String(100), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False)
@@ -132,11 +156,11 @@ class User(Base):
 # Database connection factory
 class DatabaseManager:
     """Manages async database connections."""
-    
+
     def __init__(self, database_url: str):
         """
         Initialize database manager.
-        
+
         Args:
             database_url: PostgreSQL connection string (asyncpg driver)
                          e.g., postgresql+asyncpg://user:pass@host/db
@@ -144,7 +168,7 @@ class DatabaseManager:
         self.database_url = database_url
         self.engine = None
         self.async_session_maker = None
-    
+
     async def initialize(self):
         """Initialize async engine and session factory."""
         self.engine = create_async_engine(
@@ -152,29 +176,27 @@ class DatabaseManager:
             echo=False,
             pool_size=20,
             max_overflow=10,
-            pool_pre_ping=True
+            pool_pre_ping=True,
         )
-        
+
         self.async_session_maker = sessionmaker(
-            self.engine,
-            class_=AsyncSession,
-            expire_on_commit=False
+            self.engine, class_=AsyncSession, expire_on_commit=False
         )
-        
+
         # Create all tables
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-    
+
     async def close(self):
         """Close all connections."""
         if self.engine:
             await self.engine.dispose()
-    
+
     async def get_session(self) -> AsyncSession:
         """Get new async database session."""
         if not self.async_session_maker:
             raise RuntimeError("Database not initialized. Call initialize() first.")
-        
+
         return self.async_session_maker()
 
 
@@ -185,10 +207,14 @@ _db_manager: Optional[DatabaseManager] = None
 def get_db_manager(database_url: str = None) -> DatabaseManager:
     """Get or create database manager singleton."""
     import os
+
     global _db_manager
-    
+
     if _db_manager is None:
-        url = database_url or os.getenv("DATABASE_URL", "postgresql+asyncpg://llm_user:password@localhost/llm_firewall")
+        url = database_url or os.getenv(
+            "DATABASE_URL",
+            "postgresql+asyncpg://llm_user:password@localhost/llm_firewall",
+        )
         _db_manager = DatabaseManager(url)
-    
+
     return _db_manager

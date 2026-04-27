@@ -51,20 +51,33 @@ class RegexPassExtractor:
     def __init__(self, config: dict[str, Any]) -> None:
         regex_section = config.get("regex", {})
         self._specs = [
-            RegexSpec(ClaimType.CVE, re.compile(regex_section["cve"]["pattern"], re.IGNORECASE), regex_section["cve"]["confidence"]),
+            RegexSpec(
+                ClaimType.CVE,
+                re.compile(regex_section["cve"]["pattern"], re.IGNORECASE),
+                regex_section["cve"]["confidence"],
+            ),
             RegexSpec(
                 ClaimType.ATTACK_ID,
                 re.compile(regex_section["attack"]["pattern"], re.IGNORECASE),
                 regex_section["attack"]["confidence"],
             ),
-            RegexSpec(ClaimType.CVSS, re.compile(regex_section["cvss"]["pattern"], re.IGNORECASE), regex_section["cvss"]["confidence"]),
+            RegexSpec(
+                ClaimType.CVSS,
+                re.compile(regex_section["cvss"]["pattern"], re.IGNORECASE),
+                regex_section["cvss"]["confidence"],
+            ),
         ]
 
     def extract(self, text: str) -> list[Claim]:
         claims: list[Claim] = []
         for spec in self._specs:
             for match in spec.pattern.finditer(text):
-                extracted = match.group("score") if spec.claim_type == ClaimType.CVSS and "score" in match.groupdict() else match.group(0)
+                extracted = (
+                    match.group("score")
+                    if spec.claim_type == ClaimType.CVSS
+                    and "score" in match.groupdict()
+                    else match.group(0)
+                )
                 claims.append(
                     Claim(
                         claim_type=spec.claim_type,
@@ -89,7 +102,9 @@ class SecuritySpacyExtractor:
         if spacy is None:
             return None
 
-        model_path = os.getenv(self._config.get("model_path_env", "SECURITY_SPACY_MODEL_PATH"))
+        model_path = os.getenv(
+            self._config.get("model_path_env", "SECURITY_SPACY_MODEL_PATH")
+        )
         model_name = model_path or self._config.get("model_name", "en_core_web_sm")
         try:
             return spacy.load(model_name)
@@ -129,14 +144,22 @@ class SecuritySpacyExtractor:
                         metadata={
                             "source_pass": "spacy",
                             "entity_label": ent.label_,
-                            "custom_model_loaded": bool(os.getenv(self._config.get("model_path_env", "SECURITY_SPACY_MODEL_PATH"))),
+                            "custom_model_loaded": bool(
+                                os.getenv(
+                                    self._config.get(
+                                        "model_path_env", "SECURITY_SPACY_MODEL_PATH"
+                                    )
+                                )
+                            ),
                         },
                     )
                 )
         claims.extend(self._extract_from_config_patterns(text, label_map))
         return self._deduplicate(claims)
 
-    def _extract_from_config_patterns(self, text: str, label_map: dict[str, ClaimType]) -> list[Claim]:
+    def _extract_from_config_patterns(
+        self, text: str, label_map: dict[str, ClaimType]
+    ) -> list[Claim]:
         claims: list[Claim] = []
         for label, values in self._config.get("entity_patterns", {}).items():
             claim_type = label_map.get(label)
@@ -151,8 +174,13 @@ class SecuritySpacyExtractor:
                             raw_text=match.group(0),
                             extracted_value=match.group(0),
                             position=(match.start(), match.end()),
-                            confidence=float(self._config.get("fallback_confidence", 0.78)),
-                            metadata={"source_pass": "spacy-pattern-fallback", "entity_label": label},
+                            confidence=float(
+                                self._config.get("fallback_confidence", 0.78)
+                            ),
+                            metadata={
+                                "source_pass": "spacy-pattern-fallback",
+                                "entity_label": label,
+                            },
                         )
                     )
         return claims
@@ -162,7 +190,11 @@ class SecuritySpacyExtractor:
         seen: set[tuple[str, str, tuple[int, int]]] = set()
         unique_claims: list[Claim] = []
         for claim in sorted(claims, key=lambda item: item.position):
-            key = (claim.claim_type.value, claim.extracted_value.lower(), claim.position)
+            key = (
+                claim.claim_type.value,
+                claim.extracted_value.lower(),
+                claim.position,
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -180,7 +212,10 @@ class BertSpanExtractor:
     def token_classifier(self) -> Any | None:
         if pipeline is None:
             return None
-        model_name = os.getenv(self._config.get("model_name_env", "SECURITY_BERT_MODEL_NAME"), self._config.get("model_name"))
+        model_name = os.getenv(
+            self._config.get("model_name_env", "SECURITY_BERT_MODEL_NAME"),
+            self._config.get("model_name"),
+        )
         try:
             return pipeline(
                 "token-classification",
@@ -201,8 +236,18 @@ class BertSpanExtractor:
             return []
 
         claims: list[Claim] = []
-        mitigation_groups = {group.upper() for group in self._config.get("mitigation_entity_groups", ["ACTION", "MITIGATION"])}
-        urgency_groups = {group.upper() for group in self._config.get("urgency_entity_groups", ["URGENCY", "PRIORITY"])}
+        mitigation_groups = {
+            group.upper()
+            for group in self._config.get(
+                "mitigation_entity_groups", ["ACTION", "MITIGATION"]
+            )
+        }
+        urgency_groups = {
+            group.upper()
+            for group in self._config.get(
+                "urgency_entity_groups", ["URGENCY", "PRIORITY"]
+            )
+        }
         for item in classifier(text):
             entity_group = str(item.get("entity_group", "")).upper()
             word = str(item.get("word", "")).strip()
@@ -235,7 +280,9 @@ class BertSpanExtractor:
 
     def _extract_with_heuristics(self, text: str) -> list[Claim]:
         claims: list[Claim] = []
-        verb_pattern = "|".join(re.escape(verb) for verb in self._config.get("mitigation_verbs", []))
+        verb_pattern = "|".join(
+            re.escape(verb) for verb in self._config.get("mitigation_verbs", [])
+        )
         mitigation_regex = re.compile(
             rf"\b(?:{verb_pattern})\b.*?(?=(?:[.!?]\s+[A-Z]|[.!?]$|\n|$))",
             re.IGNORECASE,
@@ -301,11 +348,21 @@ class ClaimExtractor:
             return []
 
         regex_claims = await asyncio.to_thread(self._regex_extractor.extract, text)
-        spacy_claims = await asyncio.to_thread(self._spacy_extractor.extract, text) if enable_ner else []
-        bert_claims = await asyncio.to_thread(self._bert_extractor.extract, text) if enable_span_extraction else []
+        spacy_claims = (
+            await asyncio.to_thread(self._spacy_extractor.extract, text)
+            if enable_ner
+            else []
+        )
+        bert_claims = (
+            await asyncio.to_thread(self._bert_extractor.extract, text)
+            if enable_span_extraction
+            else []
+        )
         return self._deduplicate(regex_claims + spacy_claims + bert_claims)
 
-    def extract(self, payload: str | Any) -> ClaimResponse | Coroutine[Any, Any, list[Claim]]:
+    def extract(
+        self, payload: str | Any
+    ) -> ClaimResponse | Coroutine[Any, Any, list[Claim]]:
         """Support both the new async text API and the legacy sync request API."""
         if isinstance(payload, str):
             return self.extract_async(payload)
@@ -313,7 +370,9 @@ class ClaimExtractor:
         if ClaimRequest is not None and isinstance(payload, ClaimRequest):
             return self._extract_legacy_request(payload)
 
-        raise TypeError("ClaimExtractor.extract expects either raw text or ClaimRequest.")
+        raise TypeError(
+            "ClaimExtractor.extract expects either raw text or ClaimRequest."
+        )
 
     def _extract_legacy_request(self, request: Any) -> ClaimResponse:
         """Bridge the new pipeline to the repo's older ClaimRequest/ClaimResponse contract."""
@@ -325,14 +384,18 @@ class ClaimExtractor:
         except RuntimeError:
             pass
         else:  # pragma: no cover - legacy path should stay sync-only
-            raise RuntimeError("Legacy ClaimRequest extraction must be called from a synchronous context.")
+            raise RuntimeError(
+                "Legacy ClaimRequest extraction must be called from a synchronous context."
+            )
 
         started = perf_counter()
         claims = asyncio.run(
             self.extract_async(
                 request.text,
                 enable_ner=bool(getattr(request, "enable_ner", True)),
-                enable_span_extraction=bool(getattr(request, "enable_span_extraction", True)),
+                enable_span_extraction=bool(
+                    getattr(request, "enable_span_extraction", True)
+                ),
             )
         )
         latency_ms = round((perf_counter() - started) * 1000, 3)
@@ -367,7 +430,9 @@ class ClaimExtractor:
             ClaimType.URGENCY: "URGENCY",
         }
         return {
-            "claim_type": claim_type_map.get(claim.claim_type, claim.claim_type.value.upper()),
+            "claim_type": claim_type_map.get(
+                claim.claim_type, claim.claim_type.value.upper()
+            ),
             "text": claim.raw_text,
             "extracted_value": claim.extracted_value,
             "confidence": claim.confidence,

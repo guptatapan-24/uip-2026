@@ -25,7 +25,9 @@ class SecurityNerTrainingError(RuntimeError):
 def load_security_annotations(data_path: str | None = None) -> list[dict[str, Any]]:
     """Load JSONL annotations for the custom security NER model."""
     config = load_yaml_config("config/extraction.yaml")
-    default_path = config.get("spacy", {}).get("training_data_path", "tests/fixtures/security_ner_annotations.jsonl")
+    default_path = config.get("spacy", {}).get(
+        "training_data_path", "tests/fixtures/security_ner_annotations.jsonl"
+    )
     resolved = ROOT_DIR / (data_path or default_path)
     annotations: list[dict[str, Any]] = []
     with resolved.open("r", encoding="utf-8") as handle:
@@ -46,10 +48,14 @@ def train_custom_security_ner(
 ) -> Path:
     """Train and persist a custom spaCy NER model for PRODUCT, VERSION, and SEVERITY entities."""
     if spacy is None:
-        raise SecurityNerTrainingError("spaCy is not installed. Install requirements-ml.txt to train the custom NER model.")
+        raise SecurityNerTrainingError(
+            "spaCy is not installed. Install requirements-ml.txt to train the custom NER model."
+        )
 
     config = load_yaml_config("config/extraction.yaml")
-    default_output_dir = config.get("spacy", {}).get("default_output_dir", "artifacts/security_spacy_model")
+    default_output_dir = config.get("spacy", {}).get(
+        "default_output_dir", "artifacts/security_spacy_model"
+    )
     target_dir = ROOT_DIR / (output_dir or default_output_dir)
 
     annotations = load_security_annotations(data_path=data_path)
@@ -82,5 +88,7 @@ def _build_examples(nlp: Language, annotations: list[dict[str, Any]]) -> list[Ex
             (int(entity["start"]), int(entity["end"]), str(entity["label"]))
             for entity in sample.get("entities", [])
         ]
-        examples.append(Example.from_dict(nlp.make_doc(str(sample["text"])), {"entities": entities}))
+        examples.append(
+            Example.from_dict(nlp.make_doc(str(sample["text"])), {"entities": entities})
+        )
     return examples

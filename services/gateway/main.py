@@ -2,8 +2,8 @@
 """
 FastAPI application entry point.
 
-Orchestrates all microservices (claim extraction, RAG retrieval, validation, 
-decision engine) into a unified validation pipeline. Handles JWT auth, CORS, 
+Orchestrates all microservices (claim extraction, RAG retrieval, validation,
+decision engine) into a unified validation pipeline. Handles JWT auth, CORS,
 and metrics collection.
 
 TODO: Integrate Tanushree's claim_extractor module via async calls
@@ -11,8 +11,8 @@ TODO: Integrate Tapan's decision_engine module for final outcome determination
 TODO: Integrate Dhruv's rag_pipeline and audit modules
 """
 
-import os
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from prometheus_client import Counter, Histogram, generate_latest
 
 # Import route modules
-from routes import validate, decisions, audit, metrics, policy
+from routes import audit, decisions, metrics, policy, validate
 
 # Configure logging
 logging.basicConfig(level=os.getenv("API_LOG_LEVEL", "INFO"))
@@ -29,18 +29,13 @@ logger = logging.getLogger(__name__)
 
 # Prometheus metrics
 validation_counter = Counter(
-    "validation_requests_total",
-    "Total validation requests",
-    ["outcome"]
+    "validation_requests_total", "Total validation requests", ["outcome"]
 )
 validation_latency = Histogram(
-    "validation_latency_ms",
-    "Validation pipeline latency in milliseconds"
+    "validation_latency_ms", "Validation pipeline latency in milliseconds"
 )
 http_requests = Counter(
-    "http_requests_total",
-    "Total HTTP requests",
-    ["method", "endpoint", "status"]
+    "http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"]
 )
 
 
@@ -48,7 +43,7 @@ http_requests = Counter(
 async def lifespan(app: FastAPI):
     """
     Application startup and shutdown lifecycle.
-    
+
     Startup: Initialize connections (Redis, DB, FAISS index)
     Shutdown: Gracefully close connections
     """
@@ -62,9 +57,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Startup failed: {e}")
         raise
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down gateway...")
     try:
@@ -80,7 +75,7 @@ app = FastAPI(
     title="LLM Hallucination Firewall",
     description="Enterprise-grade LLM validation middleware for SOC environments",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Configure CORS
@@ -88,6 +83,7 @@ cors_origins = os.getenv("CORS_ORIGINS", '["http://localhost:3000"]')
 try:
     # Parse JSON array from env
     import json
+
     origins = json.loads(cors_origins)
 except (json.JSONDecodeError, TypeError):
     origins = ["http://localhost:3000"]
@@ -106,13 +102,11 @@ app.add_middleware(
 async def metrics_middleware(request: Request, call_next):
     """Record HTTP request metrics."""
     response = await call_next(request)
-    
+
     http_requests.labels(
-        method=request.method,
-        endpoint=request.url.path,
-        status=response.status_code
+        method=request.method, endpoint=request.url.path, status=response.status_code
     ).inc()
-    
+
     return response
 
 
@@ -123,7 +117,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Internal server error"}
+        content={"detail": "Internal server error"},
     )
 
 
@@ -132,15 +126,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def health_check():
     """
     System health check endpoint.
-    
+
     Returns:
         {"status": "healthy", "service": "gateway"}
     """
-    return {
-        "status": "healthy",
-        "service": "gateway",
-        "version": "1.0.0"
-    }
+    return {"status": "healthy", "service": "gateway", "version": "1.0.0"}
 
 
 # Ready check endpoint (K8s readiness probe)
@@ -148,10 +138,10 @@ async def health_check():
 async def ready_check():
     """
     Readiness check endpoint (dependencies must be healthy).
-    
+
     Returns:
         {"status": "ready"} if all dependencies accessible
-        
+
     Raises:
         500 if any dependency unavailable
     """
@@ -166,7 +156,7 @@ async def ready_check():
 async def metrics():
     """
     Prometheus metrics endpoint.
-    
+
     Returns:
         Prometheus-format metrics
     """
@@ -196,20 +186,20 @@ async def root():
             "validate": "/v1/validate",
             "decisions": "/v1/decisions",
             "audit": "/v1/audit/log",
-            "policy": "/v1/policy"
-        }
+            "policy": "/v1/policy",
+        },
     }
 
 
 if __name__ == "__main__":
     import uvicorn
-    
+
     host = os.getenv("API_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", "8000"))
-    
+
     uvicorn.run(
         "main:app",
         host=host,
         port=port,
-        reload=os.getenv("API_ENV", "production") == "development"
+        reload=os.getenv("API_ENV", "production") == "development",
     )

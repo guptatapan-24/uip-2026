@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections import defaultdict
 
 from services.common.config import load_profile
-from services.common.models import CorrectionCandidate, DecisionResult, RuleResult, RuleSignal
+from services.common.models import (
+    CorrectionCandidate,
+    DecisionResult,
+    RuleResult,
+    RuleSignal,
+)
 
 
 class DecisionEngine:
@@ -19,7 +24,10 @@ class DecisionEngine:
         """Generate the final decision outcome from validation rule outputs."""
         signal_scores = self._score_signals(rule_results)
         risk_score = round(
-            sum(float(weight) * signal_scores[signal] for signal, weight in self.profile.get("weights", {}).items()),
+            sum(
+                float(weight) * signal_scores[signal]
+                for signal, weight in self.profile.get("weights", {}).items()
+            ),
             4,
         )
 
@@ -27,7 +35,11 @@ class DecisionEngine:
         hard_fail_rule_ids = [
             result.rule_id
             for result in rule_results
-            if not result.passed and (result.hard_fail or result.rule_id in self.profile.get("hard_fail_rule_ids", []))
+            if not result.passed
+            and (
+                result.hard_fail
+                or result.rule_id in self.profile.get("hard_fail_rule_ids", [])
+            )
         ]
 
         correction = self._rank_correction_candidates(rule_results)
@@ -38,7 +50,9 @@ class DecisionEngine:
         else:
             outcome = "FLAG"
 
-        rationale = self._build_rationale(outcome, risk_score, signal_scores, hard_fail_rule_ids, correction)
+        rationale = self._build_rationale(
+            outcome, risk_score, signal_scores, hard_fail_rule_ids, correction
+        )
         return DecisionResult(
             outcome=outcome,
             risk_score=risk_score,
@@ -63,14 +77,20 @@ class DecisionEngine:
             if values:
                 signal_scores[signal.value] = round(sum(values) / len(values), 4)
             else:
-                signal_scores[signal.value] = round(float(defaults.get(signal.value, 0.5)), 4)
+                signal_scores[signal.value] = round(
+                    float(defaults.get(signal.value, 0.5)), 4
+                )
         return signal_scores
 
     @staticmethod
     def _rule_score(result: RuleResult) -> float:
-        return round(result.confidence if result.passed else (1.0 - result.confidence), 4)
+        return round(
+            result.confidence if result.passed else (1.0 - result.confidence), 4
+        )
 
-    def _rank_correction_candidates(self, rule_results: list[RuleResult]) -> CorrectionCandidate | None:
+    def _rank_correction_candidates(
+        self, rule_results: list[RuleResult]
+    ) -> CorrectionCandidate | None:
         correction_cfg = self.profile.get("correction", {})
         min_score = float(correction_cfg.get("min_candidate_score", 0.55))
         scores: dict[str, float] = defaultdict(float)
@@ -83,7 +103,9 @@ class DecisionEngine:
             for candidate in result.correction_candidates:
                 scores[candidate] += result.confidence
                 support_counts[candidate] += 1
-                reasons.setdefault(candidate, f"Suggested by {result.rule_id}: {result.evidence}")
+                reasons.setdefault(
+                    candidate, f"Suggested by {result.rule_id}: {result.evidence}"
+                )
 
         if not scores:
             return None
@@ -93,7 +115,9 @@ class DecisionEngine:
         if normalised < min_score:
             return None
 
-        return CorrectionCandidate(value=ranked_value, reason=reasons[ranked_value], score=round(normalised, 4))
+        return CorrectionCandidate(
+            value=ranked_value, reason=reasons[ranked_value], score=round(normalised, 4)
+        )
 
     @staticmethod
     def _build_rationale(
@@ -113,6 +137,8 @@ class DecisionEngine:
         return message
 
 
-async def decide(rule_results: list[RuleResult], profile_name: str = "default") -> DecisionResult:
+async def decide(
+    rule_results: list[RuleResult], profile_name: str = "default"
+) -> DecisionResult:
     """Convenience async wrapper for the decision engine."""
     return await DecisionEngine(profile_name=profile_name).decide(rule_results)

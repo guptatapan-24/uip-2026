@@ -14,6 +14,7 @@ TODO: Wire Tanushree's or Tapan's modules if they handle scheduled tasks
 
 import asyncio
 import os
+
 from celery import Celery, Task
 from celery.schedules import crontab
 
@@ -26,7 +27,7 @@ from celery.schedules import crontab
 celery_app = Celery(
     "rag_pipeline",
     broker=os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1"),
-    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2"),
 )
 
 celery_app.conf.update(
@@ -40,9 +41,10 @@ celery_app.conf.update(
 
 class CallbackTask(Task):
     """Task with callbacks for success/failure."""
+
     def on_success(self, retval, task_id, args, kwargs):
         print(f"Task {task_id} completed successfully")
-    
+
     def on_failure(self, exc, task_id, args, kwargs, einfo):
         print(f"Task {task_id} failed: {exc}")
 
@@ -51,7 +53,7 @@ class CallbackTask(Task):
 def sync_kev(self):
     """
     Sync CISA Known Exploited Vulnerabilities daily.
-    
+
     Fetches latest KEV catalog and updates cache.
     """
     try:
@@ -68,7 +70,7 @@ def sync_kev(self):
 def sync_nvd_delta(self):
     """
     Sync NVD vulnerability database weekly (delta/incremental).
-    
+
     Fetches modified CVEs from last sync timestamp.
     """
     try:
@@ -85,7 +87,7 @@ def sync_nvd_delta(self):
 def sync_attack(self):
     """
     Sync MITRE ATT&CK framework monthly (full).
-    
+
     Fetches all techniques, tactics, and relationships.
     """
     try:

@@ -24,7 +24,11 @@ class SemanticScorer:
 
     @cached_property
     def model_name(self) -> str:
-        return str(self.profile.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2"))
+        return str(
+            self.profile.get(
+                "embedding_model", "sentence-transformers/all-MiniLM-L6-v2"
+            )
+        )
 
     @cached_property
     def model(self) -> Any | None:
@@ -42,7 +46,11 @@ class SemanticScorer:
         threshold_override: float | None = None,
     ) -> SemanticValidationResult:
         """Score the best evidence chunk against a claim using embeddings or lexical fallback."""
-        threshold = float(threshold_override if threshold_override is not None else self.profile.get("semantic_threshold", 0.72))
+        threshold = float(
+            threshold_override
+            if threshold_override is not None
+            else self.profile.get("semantic_threshold", 0.72)
+        )
         if not evidence_texts:
             return SemanticValidationResult(
                 claim_text=claim_text,
@@ -51,33 +59,50 @@ class SemanticScorer:
                 threshold=threshold,
                 passed=False,
                 model_name=self.model_name,
-            policy_profile=self.profile_name,
-        )
+                policy_profile=self.profile_name,
+            )
 
-        best_text, best_score = await asyncio.to_thread(self._best_similarity, claim_text, evidence_texts)
+        best_text, best_score = await asyncio.to_thread(
+            self._best_similarity, claim_text, evidence_texts
+        )
         return SemanticValidationResult(
             claim_text=claim_text,
             evidence_text=best_text,
             similarity=round(best_score, 4),
             threshold=threshold,
             passed=best_score >= threshold,
-            model_name=self.model_name if self.model is not None else "lexical-fallback",
+            model_name=(
+                self.model_name if self.model is not None else "lexical-fallback"
+            ),
             policy_profile=self.profile_name,
         )
 
-    async def similarity(self, claim_text: str, evidence_texts: list[str]) -> tuple[str, float]:
+    async def similarity(
+        self, claim_text: str, evidence_texts: list[str]
+    ) -> tuple[str, float]:
         """Return the best evidence chunk and raw similarity score without thresholding."""
         if not evidence_texts:
             return "", 0.0
-        return await asyncio.to_thread(self._best_similarity, claim_text, evidence_texts)
+        return await asyncio.to_thread(
+            self._best_similarity, claim_text, evidence_texts
+        )
 
-    def _best_similarity(self, claim_text: str, evidence_texts: list[str]) -> tuple[str, float]:
+    def _best_similarity(
+        self, claim_text: str, evidence_texts: list[str]
+    ) -> tuple[str, float]:
         if self.model is not None:
             claim_embedding = self.model.encode(claim_text, normalize_embeddings=True)
-            evidence_embeddings = self.model.encode(evidence_texts, normalize_embeddings=True)
-            similarities = [float(claim_embedding @ embedding) for embedding in evidence_embeddings]
+            evidence_embeddings = self.model.encode(
+                evidence_texts, normalize_embeddings=True
+            )
+            similarities = [
+                float(claim_embedding @ embedding) for embedding in evidence_embeddings
+            ]
         else:
-            similarities = [self._lexical_similarity(claim_text, evidence) for evidence in evidence_texts]
+            similarities = [
+                self._lexical_similarity(claim_text, evidence)
+                for evidence in evidence_texts
+            ]
 
         best_index = max(range(len(evidence_texts)), key=lambda idx: similarities[idx])
         return evidence_texts[best_index], float(similarities[best_index])
