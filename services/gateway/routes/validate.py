@@ -1,203 +1,242 @@
-# services/gateway/routes/validate.py
-"""
-Main validation pipeline endpoint.
+"""Validation endpoint for deterministic and semantic validation."""
 
-Orchestrates: claim extraction → RAG retrieval → validation → decision engine → explainability
+from __future__ import annotations
 
-TODO: Wire Tanushree's claim_extractor module
-TODO: Wire Dhruv's rag_pipeline module
-TODO: Wire validation_engine modules
-TODO: Wire Tapan's decision_engine module
-TODO: Wire explainability module
-"""
-
+import asyncio
+import json
+import logging
+import os
 import time
-import uuid
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any
 
-from auth import CurrentUser, get_current_user, require_role
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, status
+from services.claim_extractor.extractor import extract_claims
+from services.common.models import RuleSignal
+from services.validation_engine.deterministic import (
+    cve_exists_in_nvd,
+    cvss_score_in_range,
+    attack_id_valid,
+    version_in_affected_range,
+)
+from services.validation_engine.semantic import SemanticScorer
+
+from models import ValidateRequest, ValidateResponse, RuleResultResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-class ContextInput(BaseModel):
-    """Validation context provided by SOC analyst."""
+async def run_deterministic_validations(
+    claims: list[dict[str, Any] | RuleResultResponse], nvd_data: dict[str, Any], attack_data: dict[str, Any]
+) -> list[RuleResultResponse]:
+    """
+    Run deterministic validation rules against extracted claims.
 
-    alert_id: str = Field(..., description="Unique alert identifier")
-    severity_hint: Optional[str] = Field(
-        None, description="Alert severity: CRITICAL, HIGH, MEDIUM, LOW"
-    )
-    policy_profile: str = Field(
-        default="default", description="Policy profile name for decision thresholds"
-    )
+    Args:
+        claims: List of extracted claims (dict or RuleResultResponse)
+        nvd_data: NVD payload for CVE validation
+        attack_data: ATT&CK payload for technique validation
+
+    Returns:
+        List of validation rule results
+    """
+    results = []
+
+    # Validate each CVE claim
+    for claim in claims:
+        # Handle both dict and Pydantic model
+        claim_type = claim.get("claim_type") if isinstance(claim, dict) else getattr(claim, "claim_type", None)
+        extracted_value = claim.get("extracted_value") if isinstance(claim, dict) else getattr(claim, "extracted_value", None)
+        
+        if claim_type == "cve":
+            cve_id = extracted_value or ""
+            try:
+                result = cve_exists_in_nvd(cve_id, nvd_data)
+                results.append(
+                    RuleResultResponse(
+                        rule_id=result.rule_id,
+                        passed=result.passed,
+                        evidence=result.evidence,
+                        confidence=result.confidence,
+                        signal=result.signal.value if result.signal else None,
+                        hard_fail=result.hard_fail,
+                        correction_candidates=result.correction_candidates,
+                        metadata=result.metadata,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"CVE validation error for {cve_id}: {e}")
+
+        elif claim_type == "cvss_score":
+            try:
+                claimed_score = float(extracted_value or "0")
+                nvd_score = float(nvd_data.get("cvss_score", 0.0))
+                result = cvss_score_in_range(claimed_score, nvd_score)
+                results.append(
+                    RuleResultResponse(
+                        rule_id=result.rule_id,
+                        passed=result.passed,
+                        evidence=result.evidence,
+                        confidence=result.confidence,
+                        signal=result.signal.value if result.signal else None,
+                        hard_fail=result.hard_fail,
+                        correction_candidates=result.correction_candidates,
+                        metadata=result.metadata,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"CVSS validation error: {e}")
+
+        elif claim_type == "attack_id":
+            technique_id = extracted_value or ""
+            try:
+                result = attack_id_valid(technique_id, attack_data)
+                results.append(
+                    RuleResultResponse(
+                        rule_id=result.rule_id,
+                        passed=result.passed,
+                        evidence=result.evidence,
+                        confidence=result.confidence,
+                        signal=result.signal.value if result.signal else None,
+                        hard_fail=result.hard_fail,
+                        correction_candidates=result.correction_candidates,
+                        metadata=result.metadata,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"ATT&CK validation error for {technique_id}: {e}")
+
+    return results
 
 
-class ValidateRequest(BaseModel):
-    """Main validation request payload."""
+async def run_semantic_validation(
+    llm_output: str,
+    claims: list[dict[str, Any]],
+    policy_profile: str = "default",
+) -> RuleResultResponse | None:
+    """
+    Run semantic validation on extracted claims.
 
-    llm_output: str = Field(
-        ..., min_length=1, description="LLM-generated security recommendation"
-    )
-    context: ContextInput
+    Args:
+        llm_output: Original LLM output
+        claims: List of extracted claims
+        policy_profile: Policy profile name for threshold override
 
+    Returns:
+        Semantic validation result or None if no mitigation claims
+    """
+    try:
+        # Find mitigation or remediation claims
+        mitigation_claims = [
+            c for c in claims if c.get("claim_type") in ("mitigation", "remediation")
+        ]
+        if not mitigation_claims:
+            return None
 
-class Claim(BaseModel):
-    """Extracted claim from LLM output."""
+        scorer = SemanticScorer(profile_name=policy_profile)
+        claim_texts = [c.get("extracted_value", "") for c in mitigation_claims]
 
-    claim_id: str
-    text: str
-    claim_type: str  # e.g., "CVE", "ATTACK_TECHNIQUE", "SEVERITY"
-    confidence: float = Field(..., ge=0.0, le=1.0)
+        # Score best similarity
+        best_text, similarity_score = await scorer.similarity(llm_output, claim_texts)
 
+        # Get the full validation result
+        validation_result = await scorer.score(llm_output, claim_texts)
 
-class ValidationResult(BaseModel):
-    """Result of a single validation rule."""
+        return RuleResultResponse(
+            rule_id="semantic_mitigation_relevance",
+            passed=validation_result.passed,
+            evidence=f"Semantic similarity: {similarity_score:.4f}, threshold: {validation_result.threshold:.2f}",
+            confidence=similarity_score,
+            signal="mitigation_relevance",
+            hard_fail=False,
+            correction_candidates=[],
+            metadata={
+                "model_name": validation_result.model_name,
+                "similarity_score": similarity_score,
+                "threshold": validation_result.threshold,
+            },
+        )
 
-    rule_id: str
-    rule_name: str
-    passed: bool
-    evidence: str
-    confidence: float = Field(..., ge=0.0, le=1.0)
-
-
-class ExplainabilityFactor(BaseModel):
-    """Factor contributing to final risk score."""
-
-    factor_name: str
-    weight: float
-    value: float
-    contribution: float
-
-
-class ValidateResponse(BaseModel):
-    """Validation pipeline output."""
-
-    decision_id: str
-    outcome: str = Field(..., description="ALLOW | FLAG | BLOCK | CORRECT")
-    risk_score: float = Field(..., ge=0.0, le=1.0, description="Final risk score")
-    claims: List[Claim] = Field(default_factory=list)
-    validation_results: List[ValidationResult] = Field(default_factory=list)
-    explainability_factors: List[ExplainabilityFactor] = Field(default_factory=list)
-    analyst_rationale: str = Field(default="", description="Human-readable explanation")
-    latency_ms: float
-    timestamp: str
+    except Exception as e:
+        logger.error(f"Semantic validation error: {e}", exc_info=True)
+        return None
 
 
 @router.post(
     "/validate",
     response_model=ValidateResponse,
     status_code=status.HTTP_200_OK,
-    summary="Validate LLM output against threat intelligence",
+    summary="Validate extracted claims",
+    tags=["Validation"],
 )
-async def validate_llm_output(
-    request: ValidateRequest, current_user: CurrentUser = Depends(get_current_user)
-) -> ValidateResponse:
+async def validate_endpoint(request: ValidateRequest) -> ValidateResponse:
     """
-    Core validation pipeline endpoint.
+    Validate extracted claims using deterministic rules and semantic similarity.
 
-    Process flow:
-    1. Claim Extraction: Parse LLM output into structured claims (CVE IDs, techniques, etc.)
-    2. RAG Retrieval: Fetch authoritative threat intelligence for each claim
-    3. Validation: Apply deterministic rules, semantic similarity, LLM verification
-    4. Decision: Compute risk score and final outcome (ALLOW | FLAG | BLOCK | CORRECT)
-    5. Explainability: Generate decision rationale and evidence chain
+    Runs:
+    1. Deterministic validators: CVE existence, CVSS range, ATT&CK format/existence
+    2. Semantic validator: Mitigation relevance using sentence transformers
 
     Args:
-        request: Validation request with LLM output and context
-        current_user: Authenticated user (any role can validate)
+        request: ValidateRequest with LLM output and optional pre-extracted claims
 
     Returns:
-        Comprehensive validation result with outcome and evidence
+        ValidateResponse with validation rule results and latency metrics
 
     Raises:
-        400: Invalid request format
-        401: Unauthorized
-        500: Pipeline error
+        HTTPException: If validation pipeline fails
     """
-    start_time = time.time()
-    decision_id = str(uuid.uuid4())
-
     try:
-        # Step 1: Extract claims from LLM output
-        # TODO: Call Tanushree's claim_extractor.extract_claims(request.llm_output)
-        extracted_claims = []
+        start_time = time.perf_counter()
 
-        # Step 2: Retrieve threat intelligence
-        # TODO: Call Dhruv's rag_pipeline.retrieve_threat_intel(extracted_claims)
-        threat_intel_matches = {}
+        # Extract claims if not provided
+        if request.extracted_claims:
+            extracted = request.extracted_claims
+        else:
+            extracted_claims = await extract_claims(request.llm_output)
+            extracted = [
+                {
+                    "claim_type": c.claim_type.value,
+                    "raw_text": c.raw_text,
+                    "extracted_value": c.extracted_value,
+                    "position": c.position,
+                    "confidence": c.confidence,
+                }
+                for c in extracted_claims
+            ]
 
-        # Step 3: Validate claims against threat intelligence
-        # TODO: Call validation_engine.deterministic.validate(claims, threat_intel)
-        # TODO: Call validation_engine.semantic.validate(claims, threat_intel)
-        # TODO: Call validation_engine.llm_verifier.verify(claims, llm_output)
-        validation_results = []
+        # Prepare validation data
+        nvd_data = request.nvd_data or {}
+        attack_data = request.attack_data or {}
 
-        # Step 4: Compute decision
-        # TODO: Call Tapan's decision_engine.compute_decision(validation_results, context)
-        risk_score = 0.75
-        outcome = "FLAG"
-        correction_candidate = None
+        # Run deterministic validations
+        det_results = await run_deterministic_validations(extracted, nvd_data, attack_data)
 
-        # Step 5: Generate explainability
-        # TODO: Call explainability.report_builder.build_report(decision_data)
-        explainability_factors = []
-        analyst_rationale = (
-            "LLM recommendation requires verification against CVE database"
+        # Run semantic validation
+        sem_result = await run_semantic_validation(
+            request.llm_output, extracted, request.context.policy_profile
         )
 
-        # Step 6: Audit log (append to hash chain)
-        # TODO: Call Dhruv's audit_log.append(decision_record)
-
-        latency_ms = (time.time() - start_time) * 1000
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
 
         return ValidateResponse(
-            decision_id=decision_id,
-            outcome=outcome,
-            risk_score=risk_score,
-            claims=extracted_claims,
-            validation_results=validation_results,
-            explainability_factors=explainability_factors,
-            analyst_rationale=analyst_rationale,
-            latency_ms=latency_ms,
-            timestamp=str(time.time()),
+            alert_id=request.context.alert_id,
+            deterministic_rules=det_results,
+            semantic_validation=sem_result,
+            total_latency_ms=round(elapsed_ms, 2),
         )
 
+    except ValueError as e:
+        logger.warning(f"Validation request error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid validation request: {str(e)}",
+        )
     except Exception as e:
-        # Log error and audit
-        # TODO: Audit error state
+        logger.error(f"Validation endpoint error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Validation pipeline error: {str(e)}",
+            detail="Validation pipeline failed",
         )
-
-
-@router.get(
-    "/validate/{decision_id}",
-    response_model=ValidateResponse,
-    summary="Retrieve validation result",
-)
-async def get_validation_result(
-    decision_id: str, current_user: CurrentUser = Depends(get_current_user)
-) -> ValidateResponse:
-    """
-    Retrieve previously computed validation result by decision ID.
-
-    Args:
-        decision_id: UUID of prior validation decision
-        current_user: Authenticated user
-
-    Returns:
-        Original validation response
-
-    Raises:
-        404: Decision not found
-    """
-    # TODO: Query PostgreSQL for decision record
-    # TODO: Reconstruct ValidateResponse from database
-
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Decision {decision_id} not found",
-    )

@@ -1,18 +1,14 @@
-# services/gateway/main.py
 """
 FastAPI application entry point.
 
 Orchestrates all microservices (claim extraction, RAG retrieval, validation,
-decision engine) into a unified validation pipeline. Handles JWT auth, CORS,
+decision engine) into a unified validation pipeline. Handles CORS,
 and metrics collection.
-
-TODO: Integrate Tanushree's claim_extractor module via async calls
-TODO: Integrate Tapan's decision_engine module for final outcome determination
-TODO: Integrate Dhruv's rag_pipeline and audit modules
 """
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -20,16 +16,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import Counter, Histogram, generate_latest
 
-# Import route modules
-from routes import audit, decisions, metrics, policy, validate
+from config import get_config, setup_logging
 
-# Configure logging
-logging.basicConfig(level=os.getenv("API_LOG_LEVEL", "INFO"))
+# Import route modules
+from routes import extract, validate, decide, health
+
+# Configure logging and get config
+config = get_config()
 logger = logging.getLogger(__name__)
 
 # Prometheus metrics
 validation_counter = Counter(
-    "validation_requests_total", "Total validation requests", ["outcome"]
+    "validation_requests_total", "Total validation requests", ["endpoint"]
 )
 validation_latency = Histogram(
     "validation_latency_ms", "Validation pipeline latency in milliseconds"
@@ -44,18 +42,27 @@ async def lifespan(app: FastAPI):
     """
     Application startup and shutdown lifecycle.
 
-    Startup: Initialize connections (Redis, DB, FAISS index)
+    Startup: Initialize connections and verify configuration
     Shutdown: Gracefully close connections
     """
     # Startup
     logger.info("Starting LLM Hallucination Firewall gateway...")
     try:
-        # TODO: Initialize Redis connection pool
-        # TODO: Load FAISS indexes into memory
-        # TODO: Verify PostgreSQL connectivity
+        # Verify core services are importable
+        from services.claim_extractor.extractor import extract_claims
+        from services.validation_engine.deterministic import cve_exists_in_nvd
+        from services.decision_engine.engine import decide
+        from services.common.config import load_profile
+
+        logger.info("Core services verified")
+
+        # Load default policy profile
+        default_profile = load_profile("default")
+        logger.info(f"Default policy profile loaded with {len(default_profile.get('weights', {}))} signal weights")
+
         logger.info("Gateway initialization complete")
     except Exception as e:
-        logger.error(f"Startup failed: {e}")
+        logger.error(f"Startup failed: {e}", exc_info=True)
         raise
 
     yield
@@ -63,8 +70,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down gateway...")
     try:
-        # TODO: Close Redis connections
-        # TODO: Flush metrics
         logger.info("Gateway shutdown complete")
     except Exception as e:
         logger.error(f"Shutdown error: {e}")
@@ -79,18 +84,10 @@ app = FastAPI(
 )
 
 # Configure CORS
-cors_origins = os.getenv("CORS_ORIGINS", '["http://localhost:3000"]')
-try:
-    # Parse JSON array from env
-    import json
-
-    origins = json.loads(cors_origins)
-except (json.JSONDecodeError, TypeError):
-    origins = ["http://localhost:3000"]
-
+cors_origins = config.get_cors_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -99,76 +96,35 @@ app.add_middleware(
 
 # Middleware for request logging and metrics
 @app.middleware("http")
-async def metrics_middleware(request: Request, call_next):
-    """Record HTTP request metrics."""
+async def log_and_metrics_middleware(request: Request, call_next):
+    """Log all requests and track Prometheus metrics."""
+    start_time = time.time()
     response = await call_next(request)
+    process_time = (time.time() - start_time) * 1000
 
     http_requests.labels(
         method=request.method, endpoint=request.url.path, status=response.status_code
     ).inc()
 
+    logger.info(
+        f"{request.method} {request.url.path} - {response.status_code} - {process_time:.2f}ms"
+    )
+
     return response
 
 
-# Error handlers
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """Handle uncaught exceptions."""
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "Internal server error"},
-    )
+# Include routers
+app.include_router(health.router, tags=["Health"])
+app.include_router(extract.router, prefix="/api/v1", tags=["Extraction"])
+app.include_router(validate.router, prefix="/api/v1", tags=["Validation"])
+app.include_router(decide.router, prefix="/api/v1", tags=["Decision"])
 
 
-# Health check endpoint
-@app.get("/health", tags=["System"])
-async def health_check():
-    """
-    System health check endpoint.
-
-    Returns:
-        {"status": "healthy", "service": "gateway"}
-    """
-    return {"status": "healthy", "service": "gateway", "version": "1.0.0"}
-
-
-# Ready check endpoint (K8s readiness probe)
-@app.get("/ready", tags=["System"])
-async def ready_check():
-    """
-    Readiness check endpoint (dependencies must be healthy).
-
-    Returns:
-        {"status": "ready"} if all dependencies accessible
-
-    Raises:
-        500 if any dependency unavailable
-    """
-    # TODO: Check Redis connectivity
-    # TODO: Check PostgreSQL connectivity
-    # TODO: Check FAISS index loaded
-    return {"status": "ready"}
-
-
-# Metrics endpoint (Prometheus)
-@app.get("/metrics", tags=["Monitoring"])
+# Metrics endpoint
+@app.get("/metrics", include_in_schema=False)
 async def metrics():
-    """
-    Prometheus metrics endpoint.
-
-    Returns:
-        Prometheus-format metrics
-    """
-    return generate_latest()
-
-
-# Include route modules
-app.include_router(validate.router, prefix="/v1", tags=["Validation"])
-app.include_router(decisions.router, prefix="/v1", tags=["Decisions"])
-app.include_router(audit.router, prefix="/v1", tags=["Audit"])
-app.include_router(metrics.router, prefix="/v1", tags=["Metrics"])
-app.include_router(policy.router, prefix="/v1", tags=["Policy"])
+    """Prometheus metrics endpoint."""
+    return JSONResponse(content={"metrics": "Use Prometheus scraper"})
 
 
 # Root endpoint
@@ -181,12 +137,9 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "health": "/health",
-            "ready": "/ready",
-            "metrics": "/metrics",
-            "validate": "/v1/validate",
-            "decisions": "/v1/decisions",
-            "audit": "/v1/audit/log",
-            "policy": "/v1/policy",
+            "extract": "/api/v1/extract",
+            "validate": "/api/v1/validate",
+            "decide": "/api/v1/decide",
         },
     }
 
@@ -194,12 +147,11 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.getenv("API_HOST", "0.0.0.0")
-    port = int(os.getenv("API_PORT", "8000"))
-
     uvicorn.run(
         "main:app",
-        host=host,
-        port=port,
-        reload=os.getenv("API_ENV", "production") == "development",
+        host=config.HOST,
+        port=config.PORT,
+        reload=config.DEBUG,
+        log_level=config.LOG_LEVEL.lower(),
     )
+
