@@ -78,6 +78,7 @@ jobs:
         run: |
           pytest tests/unit/ -v --cov=services/ --cov-report=xml
         env:
+          PYTHONPATH: ${{ github.workspace }}
           DATABASE_URL: postgresql+asyncpg://llm_user:password@localhost:5432/llm_firewall_test
           REDIS_URL: redis://localhost:6379/0
 
