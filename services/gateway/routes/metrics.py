@@ -13,6 +13,7 @@ from auth import CurrentUser, get_current_user
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from services.gateway.state import get_gateway_state
+from services.gateway.persistence import get_outcome_counts
 
 router = APIRouter()
 
@@ -100,14 +101,16 @@ async def get_outcome_metrics(
         {"ALLOW": int, "FLAG": int, "BLOCK": int, "CORRECT": int}
     """
     threshold = datetime.now(timezone.utc) - timedelta(minutes=time_window_minutes)
-    counts = {"ALLOW": 0, "FLAG": 0, "BLOCK": 0, "CORRECT": 0}
+    counts = await get_outcome_counts()
+    if counts is None:
+        counts = {"ALLOW": 0, "FLAG": 0, "BLOCK": 0, "CORRECT": 0}
 
-    for decision in get_gateway_state().list_decisions():
-        created_at = datetime.fromisoformat(decision.created_at.replace("Z", "+00:00"))
-        if created_at < threshold:
-            continue
-        if decision.outcome in counts:
-            counts[decision.outcome] += 1
+        for decision in get_gateway_state().list_decisions():
+            created_at = datetime.fromisoformat(decision.created_at.replace("Z", "+00:00"))
+            if created_at < threshold:
+                continue
+            if decision.outcome in counts:
+                counts[decision.outcome] += 1
 
     return counts
 

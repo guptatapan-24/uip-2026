@@ -2,10 +2,10 @@
 Unit tests for ExplainabilityReport builder.
 """
 import pytest
-from explainability.report_builder import ReportBuilder
+from services.explainability.report_builder import ReportBuilder
 
 @pytest.mark.asyncio
-def test_build_report():
+async def test_build_report():
     builder = ReportBuilder()
     report = await builder.build_report(
         decision_id="dec1",

@@ -18,6 +18,12 @@ from services.common.config import ROOT_DIR, load_yaml_config
 import yaml
 
 from services.gateway.state import OverrideRecord, get_gateway_state
+from services.gateway.persistence import (
+    create_policy_profile as create_policy_profile_db,
+    get_db_session,
+    list_policy_profiles as list_policy_profiles_db,
+    save_override,
+)
 
 router = APIRouter()
 
@@ -102,20 +108,27 @@ async def override_decision(
     override_id = str(uuid.uuid4())
     timestamp = datetime.now(timezone.utc).isoformat()
 
-    audit_entry = await get_audit_log().append(
-        decision_id=request.decision_id,
-        record_data={
-            "type": "policy_override",
-            "override_id": override_id,
-            "decision_id": request.decision_id,
-            "previous_outcome": previous_outcome,
-            "new_outcome": request.new_outcome,
-            "rationale": request.rationale,
-            "correction_suggestion": request.correction_suggestion,
-            "overridden_by": current_user.user_id,
-            "override_timestamp": timestamp,
-        },
-    )
+    audit_session = await get_db_session()
+    try:
+        audit = get_audit_log(audit_session)
+        await audit.initialize()
+        audit_entry = await audit.append(
+            decision_id=request.decision_id,
+            record_data={
+                "type": "policy_override",
+                "override_id": override_id,
+                "decision_id": request.decision_id,
+                "previous_outcome": previous_outcome,
+                "new_outcome": request.new_outcome,
+                "rationale": request.rationale,
+                "correction_suggestion": request.correction_suggestion,
+                "overridden_by": current_user.user_id,
+                "override_timestamp": timestamp,
+            },
+        )
+    finally:
+        if audit_session is not None:
+            await audit_session.close()
 
     audit_hash = audit_entry.curr_hash if audit_entry else ""
     state.add_override(
@@ -130,6 +143,17 @@ async def override_decision(
             override_timestamp=timestamp,
             audit_hash=audit_hash,
         )
+    )
+
+    await save_override(
+        decision_id=request.decision_id,
+        previous_outcome=previous_outcome,
+        new_outcome=request.new_outcome,
+        rationale=request.rationale,
+        correction_suggestion=request.correction_suggestion,
+        overridden_by=current_user.user_id,
+        audit_hash=audit_hash,
+        override_id=override_id,
     )
 
     return PolicyOverrideResponse(
@@ -162,6 +186,10 @@ async def list_policy_profiles(
     active_profile = load_yaml_config("config/policy_profiles.yaml").get(
         "active_profile", "default"
     )
+
+    db_profiles = await list_policy_profiles_db()
+    if db_profiles is not None:
+        return {"profiles": db_profiles}
 
     payload = []
     for name, profile in profiles.items():
@@ -234,4 +262,11 @@ async def create_policy_profile(
         yaml.safe_dump(current, handle, sort_keys=False)
 
     load_yaml_config.cache_clear()
+    await create_policy_profile_db(
+        name=name,
+        description=profile.get("description"),
+        thresholds=profile.get("thresholds", {}),
+        weights=profile.get("weights", {}),
+        active=bool(profile.get("active", False)),
+    )
     return {"name": name, "profile": profile, "created": True}

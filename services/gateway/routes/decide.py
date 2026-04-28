@@ -12,6 +12,7 @@ from services.decision_engine.engine import decide
 from services.common.models import RuleResult, RuleSignal
 from services.audit.audit_log import get_audit_log
 from services.gateway.state import StoredDecision, get_gateway_state
+from services.gateway.persistence import get_db_session, save_decision
 
 from models import DecideRequest, DecisionResponse, CorrectionCandidateResponse
 
@@ -76,21 +77,28 @@ async def decide_endpoint(request: DecideRequest) -> DecisionResponse:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
         decision_id = str(uuid.uuid4())
 
-        # Persist decision for history/metrics/policy routes until DB layer is wired.
-        get_gateway_state().add_decision(
-            StoredDecision(
-                decision_id=decision_id,
-                alert_id=request.alert_id,
-                llm_output="",
-                outcome=decision_result.outcome,
-                risk_score=decision_result.risk_score,
-                validation_results=[r.model_dump() for r in request.validation_results],
-                analyst_rationale=decision_result.rationale,
-                created_at=datetime.now(timezone.utc).isoformat(),
-                created_by="system",
-            )
+        stored_decision = StoredDecision(
+            decision_id=decision_id,
+            alert_id=request.alert_id,
+            llm_output="",
+            outcome=decision_result.outcome,
+            risk_score=decision_result.risk_score,
+            validation_results=[r.model_dump() for r in request.validation_results],
+            analyst_rationale=decision_result.rationale,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            created_by="system",
         )
-        await get_audit_log().append(
+        get_gateway_state().add_decision(stored_decision)
+        await save_decision(
+            stored_decision,
+            policy_profile_name=decision_result.applied_profile,
+            correction_candidate=decision_result.correction.model_dump() if decision_result.correction else None,
+        )
+        audit_session = await get_db_session()
+        try:
+            audit_log = get_audit_log(audit_session)
+            await audit_log.initialize()
+            await audit_log.append(
             decision_id=decision_id,
             record_data={
                 "type": "decision",
@@ -101,7 +109,10 @@ async def decide_endpoint(request: DecideRequest) -> DecisionResponse:
                 "applied_profile": decision_result.applied_profile,
                 "hard_fail_rule_ids": decision_result.hard_fail_rule_ids,
             },
-        )
+            )
+        finally:
+            if audit_session is not None:
+                await audit_session.close()
 
         return DecisionResponse(
             decision_id=decision_id,

@@ -12,6 +12,7 @@ from auth import CurrentUser, get_current_user
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from services.gateway.state import get_gateway_state
+from services.gateway.persistence import get_decision, list_decisions as list_decisions_db
 
 router = APIRouter()
 
@@ -76,31 +77,42 @@ async def list_decisions(
     Returns:
         List of decision summaries
     """
-    state = get_gateway_state()
-    decisions = state.list_decisions()
-
-    if outcome:
-        decisions = [d for d in decisions if d.outcome == outcome]
-    if alert_id:
-        decisions = [d for d in decisions if d.alert_id == alert_id]
+    start_dt = None
+    end_dt = None
 
     if start_date:
         start_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-        decisions = [
-            d
-            for d in decisions
-            if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) >= start_dt
-        ]
-
     if end_date:
         end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-        decisions = [
-            d
-            for d in decisions
-            if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) <= end_dt
-        ]
 
-    page = decisions[offset : offset + limit]
+    decisions = await list_decisions_db(
+        outcome=outcome,
+        alert_id=alert_id,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        limit=limit,
+        offset=offset,
+    )
+    if decisions is None:
+        decisions = get_gateway_state().list_decisions()
+        if outcome:
+            decisions = [d for d in decisions if d.outcome == outcome]
+        if alert_id:
+            decisions = [d for d in decisions if d.alert_id == alert_id]
+        if start_dt:
+            decisions = [
+                d
+                for d in decisions
+                if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) >= start_dt
+            ]
+        if end_dt:
+            decisions = [
+                d
+                for d in decisions
+                if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) <= end_dt
+            ]
+        decisions = decisions[offset : offset + limit]
+
     return [
         DecisionSummary(
             decision_id=item.decision_id,
@@ -110,7 +122,7 @@ async def list_decisions(
             created_at=item.created_at,
             created_by=item.created_by,
         )
-        for item in page
+        for item in decisions
     ]
 
 
@@ -135,7 +147,7 @@ async def get_decision_detail(
     Raises:
         404: Decision not found
     """
-    decision = get_gateway_state().get_decision(decision_id)
+    decision = await get_decision(decision_id)
     if decision is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -174,16 +186,23 @@ async def get_decision_stats(
     Returns:
         {"total": int, "allow": int, "flag": int, "block": int, "correct": int}
     """
-    decisions = get_gateway_state().list_decisions()
+    start_dt = None
+    end_dt = None
     if start_date:
         start_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+
+    decisions = await list_decisions_db(start_dt=start_dt, end_dt=end_dt, limit=10_000, offset=0)
+    if decisions is None:
+        decisions = get_gateway_state().list_decisions()
+    if start_dt:
         decisions = [
             d
             for d in decisions
             if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) >= start_dt
         ]
-    if end_date:
-        end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+    if end_dt:
         decisions = [
             d
             for d in decisions

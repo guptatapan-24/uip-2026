@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from services.audit.audit_log import get_audit_log as get_audit_log_service
 from services.gateway.state import get_gateway_state
+from services.gateway.persistence import get_db_session, list_overrides_for_decision
 
 router = APIRouter()
 
@@ -55,29 +56,35 @@ async def get_audit_log(
     Returns:
         List of audit log entries with hashes
     """
-    audit = get_audit_log_service()
-    start_id = max(1, start_entry_id)
-    entries = await audit._fetch_entries(start_id=start_id, end_id=None)
+    audit_session = await get_db_session()
+    try:
+        audit = get_audit_log_service(audit_session)
+        await audit.initialize()
+        start_id = max(1, start_entry_id)
+        entries = await audit._fetch_entries(start_id=start_id, end_id=None)
 
-    if decision_id:
-        entries = [entry for entry in entries if entry.get("decision_id") == decision_id]
+        if decision_id:
+            entries = [entry for entry in entries if entry.get("decision_id") == decision_id]
 
-    entries = entries[:limit]
-    verification = await audit.verify_chain(start_id=start_id)
-    broken_links = set(verification.get("broken_links", []))
+        entries = entries[:limit]
+        verification = await audit.verify_chain(start_id=start_id)
+        broken_links = set(verification.get("broken_links", []))
 
-    return [
-        AuditLogEntry(
-            entry_id=int(entry["id"]),
-            decision_id=str(entry["decision_id"]),
-            record_data=dict(entry.get("record_data") or {}),
-            prev_hash=str(entry.get("prev_hash") or ""),
-            curr_hash=str(entry.get("curr_hash") or ""),
-            created_at=str(entry.get("created_at") or ""),
-            verified=int(entry["id"]) not in broken_links,
-        )
-        for entry in entries
-    ]
+        return [
+            AuditLogEntry(
+                entry_id=int(entry["id"]),
+                decision_id=str(entry["decision_id"]),
+                record_data=dict(entry.get("record_data") or {}),
+                prev_hash=str(entry.get("prev_hash") or ""),
+                curr_hash=str(entry.get("curr_hash") or ""),
+                created_at=str(entry.get("created_at") or ""),
+                verified=int(entry["id"]) not in broken_links,
+            )
+            for entry in entries
+        ]
+    finally:
+        if audit_session is not None:
+            await audit_session.close()
 
 
 @router.get("/audit/verify-chain", summary="Verify audit log hash chain integrity")
@@ -105,8 +112,14 @@ async def verify_audit_chain(
             "message": str
         }
     """
-    audit = get_audit_log_service()
-    return await audit.verify_chain(start_id=max(1, start_entry_id), end_id=end_entry_id)
+    audit_session = await get_db_session()
+    try:
+        audit = get_audit_log_service(audit_session)
+        await audit.initialize()
+        return await audit.verify_chain(start_id=max(1, start_entry_id), end_id=end_entry_id)
+    finally:
+        if audit_session is not None:
+            await audit_session.close()
 
 
 @router.get(
@@ -131,52 +144,58 @@ async def get_decision_audit_trail(
             "timeline": [...]
         }
     """
-    audit = get_audit_log_service()
-    entries = await audit._fetch_entries(start_id=1, end_id=None)
-    decision_entries = [entry for entry in entries if entry.get("decision_id") == decision_id]
-    overrides = get_gateway_state().list_overrides_for_decision(decision_id)
+    audit_session = await get_db_session()
+    try:
+        audit = get_audit_log_service(audit_session)
+        await audit.initialize()
+        entries = await audit._fetch_entries(start_id=1, end_id=None)
+        decision_entries = [entry for entry in entries if entry.get("decision_id") == decision_id]
+        overrides = await list_overrides_for_decision(decision_id)
 
-    if not decision_entries and not overrides:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No audit trail found for decision {decision_id}",
-        )
+        if not decision_entries and not overrides:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No audit trail found for decision {decision_id}",
+            )
 
-    timeline = []
-    for entry in decision_entries:
-        timeline.append(
-            {
-                "type": "audit_entry",
-                "entry_id": entry.get("id"),
-                "timestamp": str(entry.get("created_at") or ""),
-            }
-        )
-    for record in overrides:
-        timeline.append(
-            {
-                "type": "override",
-                "override_id": record.override_id,
-                "timestamp": record.override_timestamp,
-            }
-        )
-    timeline.sort(key=lambda item: item.get("timestamp", ""))
+        timeline = []
+        for entry in decision_entries:
+            timeline.append(
+                {
+                    "type": "audit_entry",
+                    "entry_id": entry.get("id"),
+                    "timestamp": str(entry.get("created_at") or ""),
+                }
+            )
+        for record in overrides:
+            timeline.append(
+                {
+                    "type": "override",
+                    "override_id": record.override_id,
+                    "timestamp": record.override_timestamp,
+                }
+            )
+        timeline.sort(key=lambda item: item.get("timestamp", ""))
 
-    initial = None
-    if decision_entries:
-        first = decision_entries[0]
-        initial = AuditLogEntry(
-            entry_id=int(first["id"]),
-            decision_id=str(first["decision_id"]),
-            record_data=dict(first.get("record_data") or {}),
-            prev_hash=str(first.get("prev_hash") or ""),
-            curr_hash=str(first.get("curr_hash") or ""),
-            created_at=str(first.get("created_at") or ""),
-            verified=True,
-        ).model_dump()
+        initial = None
+        if decision_entries:
+            first = decision_entries[0]
+            initial = AuditLogEntry(
+                entry_id=int(first["id"]),
+                decision_id=str(first["decision_id"]),
+                record_data=dict(first.get("record_data") or {}),
+                prev_hash=str(first.get("prev_hash") or ""),
+                curr_hash=str(first.get("curr_hash") or ""),
+                created_at=str(first.get("created_at") or ""),
+                verified=True,
+            ).model_dump()
 
-    return {
-        "decision_id": decision_id,
-        "initial_decision": initial,
-        "overrides": [item.model_dump() for item in overrides],
-        "timeline": timeline,
-    }
+        return {
+            "decision_id": decision_id,
+            "initial_decision": initial,
+            "overrides": [item.model_dump() for item in overrides],
+            "timeline": timeline,
+        }
+    finally:
+        if audit_session is not None:
+            await audit_session.close()

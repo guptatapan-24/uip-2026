@@ -2,7 +2,7 @@
 Unit tests for AuditLog hash chain.
 """
 import pytest
-from audit.audit_log import AuditLog, AuditEntry
+from services.audit.audit_log import AuditLog, AuditEntry
 import asyncio
 
 @pytest.mark.asyncio
@@ -25,8 +25,8 @@ def test_verify_chain_fails_after_tampering():
     log = AuditLog()
     entry1 = asyncio.run(log.append("dec1", {"foo": "bar"}))
     entry2 = asyncio.run(log.append("dec2", {"baz": "qux"}))
-    # Tamper with entry2's prev_hash
-    entry2.prev_hash = "0" * 64
+    # Tamper the in-memory stored entry's curr_hash to simulate corruption
+    log._entries[1]["curr_hash"] = "0" * 64
     # Simulate verify_chain
     result = asyncio.run(log.verify_chain())
     assert not result['valid']

@@ -1,79 +1,109 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import { Menu, AlertCircle, BarChart3, Lock, Settings } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import {
+  AlertCircle,
+  BarChart3,
+  CheckCircle2,
+  ChevronRight,
+  Lock,
+  Menu,
+  Settings,
+  Shield,
+  Sparkles,
+  AlertTriangle,
+} from 'lucide-react';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
-/**
- * Main LLM Hallucination Firewall Dashboard
- * 
- * Scaffolded React component with route placeholders for five views:
- * 1. Validation Dashboard - Real-time decision outcomes
- * 2. Decision History - Filterable audit trail
- * 3. Policy Management - Decision policy profiles (SOC_ADMIN only)
- * 4. Metrics & Monitoring - Prometheus metrics visualization
- * 5. Settings - User preferences and JWT token management
- * 
- * TODO: Implement API integration to gateway service
- * TODO: Implement WebSocket for real-time updates
- * TODO: Build analyst decision override UI
- */
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+const http = axios.create({ baseURL: API_BASE, timeout: 20000 });
+
+const outcomePalette = {
+  ALLOW: '#22c55e',
+  FLAG: '#f59e0b',
+  BLOCK: '#ef4444',
+  CORRECT: '#38bdf8',
+};
+
+function loadJson(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [userRole, setUserRole] = useState('SOC_ANALYST'); // TODO: Get from JWT
+  const [userRole, setUserRole] = useState(loadJson('lhf-role', 'SOC_ANALYST'));
+  const [userId, setUserId] = useState(localStorage.getItem('lhf-user-id') || 'analyst@company.com');
+
+  useEffect(() => {
+    localStorage.setItem('lhf-role', JSON.stringify(userRole));
+  }, [userRole]);
+
+  useEffect(() => {
+    localStorage.setItem('lhf-user-id', userId);
+  }, [userId]);
 
   return (
     <Router>
-      <div className="min-h-screen bg-gray-900 text-gray-100">
-        {/* Navigation Header */}
-        <header className="bg-gray-800 border-b border-gray-700">
-          <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
-            <Link to="/" className="flex items-center space-x-2">
-              <Lock className="w-6 h-6 text-blue-500" />
-              <h1 className="text-xl font-bold">LLM Hallucination Firewall</h1>
+      <div className="min-h-screen text-slate-100 dashboard-shell">
+        <header className="border-b border-white/10 bg-slate-950/80 backdrop-blur sticky top-0 z-30">
+          <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
+            <Link to="/" className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-cyan-500/15 border border-cyan-400/20">
+                <Lock className="w-6 h-6 text-cyan-300" />
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-[0.35em] text-cyan-200/70">SOC Firewall</div>
+                <h1 className="text-lg md:text-xl font-semibold">LLM Hallucination Firewall</h1>
+              </div>
             </Link>
-            
-            <nav className="hidden md:flex space-x-6">
-              <Link to="/" className="hover:text-blue-400 transition">Dashboard</Link>
-              <Link to="/decisions" className="hover:text-blue-400 transition">Decisions</Link>
-              <Link to="/metrics" className="hover:text-blue-400 transition">Metrics</Link>
-              {userRole === 'SOC_ADMIN' && (
-                <Link to="/policy" className="hover:text-blue-400 transition">Policy</Link>
-              )}
-              <Link to="/settings" className="hover:text-blue-400 transition">Settings</Link>
+
+            <nav className="hidden md:flex items-center gap-6 text-sm text-slate-300">
+              <NavLink to="/">Dashboard</NavLink>
+              <NavLink to="/decisions">Decisions</NavLink>
+              <NavLink to="/metrics">Metrics</NavLink>
+              {userRole === 'SOC_ADMIN' && <NavLink to="/policy">Policy</NavLink>}
+              <NavLink to="/settings">Settings</NavLink>
             </nav>
 
-            <button
-              className="md:hidden p-2"
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-            >
+            <button className="md:hidden p-2 rounded-lg bg-white/5" onClick={() => setIsMenuOpen((v) => !v)}>
               <Menu className="w-6 h-6" />
             </button>
           </div>
 
-          {/* Mobile Menu */}
           {isMenuOpen && (
-            <div className="md:hidden bg-gray-700 px-4 py-2 space-y-2">
-              <Link to="/" className="block hover:text-blue-400">Dashboard</Link>
-              <Link to="/decisions" className="block hover:text-blue-400">Decisions</Link>
-              <Link to="/metrics" className="block hover:text-blue-400">Metrics</Link>
-              {userRole === 'SOC_ADMIN' && (
-                <Link to="/policy" className="block hover:text-blue-400">Policy</Link>
-              )}
-              <Link to="/settings" className="block hover:text-blue-400">Settings</Link>
+            <div className="md:hidden border-t border-white/10 px-4 py-3 bg-slate-900/95 space-y-2">
+              <NavLink mobile to="/">Dashboard</NavLink>
+              <NavLink mobile to="/decisions">Decisions</NavLink>
+              <NavLink mobile to="/metrics">Metrics</NavLink>
+              {userRole === 'SOC_ADMIN' && <NavLink mobile to="/policy">Policy</NavLink>}
+              <NavLink mobile to="/settings">Settings</NavLink>
             </div>
           )}
         </header>
 
-        {/* Main Content */}
         <main className="max-w-7xl mx-auto px-4 py-8">
           <Routes>
-            <Route path="/" element={<DashboardView />} />
-            <Route path="/decisions" element={<DecisionsView />} />
-            <Route path="/metrics" element={<MetricsView />} />
-            {userRole === 'SOC_ADMIN' && (
-              <Route path="/policy" element={<PolicyView />} />
-            )}
-            <Route path="/settings" element={<SettingsView />} />
+            <Route path="/" element={<DashboardView userRole={userRole} userId={userId} />} />
+            <Route path="/decisions" element={<DecisionsView userRole={userRole} userId={userId} />} />
+            <Route path="/metrics" element={<MetricsView userRole={userRole} />} />
+            {userRole === 'SOC_ADMIN' && <Route path="/policy" element={<PolicyView userRole={userRole} />} />}
+            <Route path="/settings" element={<SettingsView userRole={userRole} setUserRole={setUserRole} userId={userId} setUserId={setUserId} />} />
           </Routes>
         </main>
       </div>
@@ -81,348 +111,531 @@ function App() {
   );
 }
 
-/**
- * Dashboard View: Real-time validation outcome statistics
- * 
- * TODO: Connect to /v1/metrics/outcomes endpoint
- * TODO: Display pie chart of ALLOW | FLAG | BLOCK | CORRECT outcomes
- * TODO: Show recent decisions with risk scores
- * TODO: Display validation latency p50/p95/p99
- */
-function DashboardView() {
+function NavLink({ to, children, mobile = false }) {
+  return (
+    <Link
+      to={to}
+      className={`${mobile ? 'block py-1' : ''} hover:text-cyan-300 transition-colors duration-200`}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function SectionCard({ title, icon, children }) {
+  return (
+    <section className="glass-card rounded-3xl border border-white/10 p-6 shadow-2xl shadow-black/20">
+      <div className="flex items-center gap-3 mb-5">
+        <div className="p-2 rounded-xl bg-cyan-500/15 border border-cyan-400/20">{icon}</div>
+        <h2 className="text-xl md:text-2xl font-semibold">{title}</h2>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function useGatewayData() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [decisions, setDecisions] = useState([]);
+  const [outcomes, setOutcomes] = useState({ ALLOW: 0, FLAG: 0, BLOCK: 0, CORRECT: 0 });
+  const [performance, setPerformance] = useState(null);
+  const [profiles, setProfiles] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      try {
+        setLoading(true);
+        const [decisionsResp, outcomesResp, performanceResp, profilesResp] = await Promise.allSettled([
+          http.get('/decisions?limit=25'),
+          http.get('/metrics/outcomes?time_window_minutes=1440'),
+          http.get('/metrics/performance?time_window_minutes=60'),
+          http.get('/policy/profiles'),
+        ]);
+
+        if (!mounted) return;
+
+        if (decisionsResp.status === 'fulfilled') setDecisions(decisionsResp.value.data);
+        if (outcomesResp.status === 'fulfilled') setOutcomes(outcomesResp.value.data);
+        if (performanceResp.status === 'fulfilled') setPerformance(performanceResp.value.data);
+        if (profilesResp.status === 'fulfilled') setProfiles(profilesResp.value.data.profiles || []);
+      } catch (err) {
+        if (!mounted) return;
+        setError(err?.response?.data?.detail || err.message || 'Failed to load gateway data');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  return { loading, error, decisions, outcomes, performance, profiles, setDecisions, setProfiles };
+}
+
+function DashboardView({ userRole }) {
+  const { loading, error, decisions, outcomes, performance } = useGatewayData();
+  const outcomeData = useMemo(
+    () => Object.entries(outcomes).map(([name, value]) => ({ name, value, fill: outcomePalette[name] })),
+    [outcomes],
+  );
+
   return (
     <div className="space-y-6">
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <h2 className="text-2xl font-bold mb-4 flex items-center space-x-2">
-          <BarChart3 className="w-6 h-6" />
-          <span>Validation Dashboard</span>
-        </h2>
-        
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {/* Outcome Cards */}
-          <div className="bg-green-900 bg-opacity-30 rounded p-4 border border-green-700">
-            <div className="text-sm text-gray-400">ALLOW</div>
-            <div className="text-3xl font-bold text-green-400">142</div>
-            <div className="text-xs text-gray-500 mt-1">Last 24h</div>
+      <div className="hero-grid rounded-[2rem] border border-white/10 p-6 md:p-8 overflow-hidden">
+        <div className="max-w-3xl">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-400/20 text-cyan-200 text-xs uppercase tracking-[0.35em]">
+            <Sparkles className="w-3.5 h-3.5" /> Live gateway telemetry
           </div>
-
-          <div className="bg-yellow-900 bg-opacity-30 rounded p-4 border border-yellow-700">
-            <div className="text-sm text-gray-400">FLAG</div>
-            <div className="text-3xl font-bold text-yellow-400">38</div>
-            <div className="text-xs text-gray-500 mt-1">Last 24h</div>
-          </div>
-
-          <div className="bg-red-900 bg-opacity-30 rounded p-4 border border-red-700">
-            <div className="text-sm text-gray-400">BLOCK</div>
-            <div className="text-3xl font-bold text-red-400">12</div>
-            <div className="text-xs text-gray-500 mt-1">Last 24h</div>
-          </div>
-
-          <div className="bg-blue-900 bg-opacity-30 rounded p-4 border border-blue-700">
-            <div className="text-sm text-gray-400">CORRECT</div>
-            <div className="text-3xl font-bold text-blue-400">5</div>
-            <div className="text-xs text-gray-500 mt-1">Last 24h</div>
-          </div>
-        </div>
-
-        <div className="mt-6 bg-gray-700 rounded p-4">
-          <p className="text-sm text-gray-400">
-            📊 Recharts pie chart placeholder - Show decision outcome distribution
+          <h2 className="mt-4 text-3xl md:text-5xl font-semibold leading-tight">Decision intelligence for SOC analysts.</h2>
+          <p className="mt-4 text-slate-300 max-w-2xl">
+            Monitor validation outcomes, inspect recent decisions, and move directly into audit or override workflows when a recommendation needs human review.
           </p>
         </div>
-      </div>
-
-      {/* Recent Decisions */}
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <h3 className="text-lg font-bold mb-4">Recent Decisions</h3>
-        <div className="space-y-2">
-          {[1, 2, 3].map(i => (
-            <div key={i} className="bg-gray-700 rounded p-3 flex justify-between items-center">
-              <div>
-                <div className="text-sm font-mono">Alert #{i}</div>
-                <div className="text-xs text-gray-400">Risk: 0.72 | Policy: default</div>
-              </div>
-              <span className="px-3 py-1 bg-yellow-500 bg-opacity-20 text-yellow-300 rounded text-sm">
-                FLAG
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Decisions View: Filterable decision history with pagination
- * 
- * TODO: Connect to /v1/decisions endpoint
- * TODO: Implement filtering by outcome, date range, alert_id
- * TODO: Add pagination controls
- * TODO: Show decision detail modal on click
- * TODO: Allow analyst override (SOC_ADMIN only)
- */
-function DecisionsView() {
-  return (
-    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-      <h2 className="text-2xl font-bold mb-6">Decision History</h2>
-      
-      {/* Filters */}
-      <div className="bg-gray-700 rounded p-4 mb-6 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <input
-            type="text"
-            placeholder="Alert ID..."
-            className="bg-gray-600 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <select className="bg-gray-600 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500">
-            <option>All Outcomes</option>
-            <option>ALLOW</option>
-            <option>FLAG</option>
-            <option>BLOCK</option>
-            <option>CORRECT</option>
-          </select>
-          <input
-            type="date"
-            className="bg-gray-600 rounded px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-        <button className="w-full md:w-auto bg-blue-600 hover:bg-blue-700 rounded px-4 py-2 text-sm font-medium transition">
-          Search
-        </button>
-      </div>
-
-      {/* Decision Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-600">
-              <th className="text-left py-3 px-2">Decision ID</th>
-              <th className="text-left py-3 px-2">Alert ID</th>
-              <th className="text-left py-3 px-2">Outcome</th>
-              <th className="text-left py-3 px-2">Risk Score</th>
-              <th className="text-left py-3 px-2">Created</th>
-              <th className="text-left py-3 px-2">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[1, 2, 3, 4, 5].map(i => (
-              <tr key={i} className="border-b border-gray-700 hover:bg-gray-700 transition">
-                <td className="py-3 px-2 font-mono text-xs">dec-{i}...</td>
-                <td className="py-3 px-2">ALT-2024-{i}</td>
-                <td className="py-3 px-2">
-                  <span className={`px-2 py-1 rounded text-xs ${
-                    i % 3 === 0 ? 'bg-green-500 bg-opacity-20 text-green-300' :
-                    i % 3 === 1 ? 'bg-yellow-500 bg-opacity-20 text-yellow-300' :
-                    'bg-red-500 bg-opacity-20 text-red-300'
-                  }`}>
-                    {i % 3 === 0 ? 'ALLOW' : i % 3 === 1 ? 'FLAG' : 'BLOCK'}
-                  </span>
-                </td>
-                <td className="py-3 px-2">{(0.5 + Math.random() * 0.5).toFixed(2)}</td>
-                <td className="py-3 px-2 text-gray-400 text-xs">2024-01-{15 + i}</td>
-                <td className="py-3 px-2">
-                  <button className="text-blue-400 hover:text-blue-300 text-xs">View</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Metrics View: Prometheus metrics visualization
- * 
- * TODO: Connect to /v1/metrics/performance endpoint
- * TODO: Display validation latency trends (p50, p95, p99)
- * TODO: Show RAG retrieval quality metrics
- * TODO: Display decision distribution over time
- * TODO: Show LLM verifier circuit breaker status
- */
-function MetricsView() {
-  return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold">System Metrics & Monitoring</h2>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-          <h3 className="text-lg font-bold mb-4">Validation Latency</h3>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-gray-400">p50</span>
-              <span className="font-mono">145ms</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">p95</span>
-              <span className="font-mono">523ms</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">p99</span>
-              <span className="font-mono">1247ms</span>
-            </div>
-          </div>
-          <div className="mt-6 bg-gray-700 rounded p-4">
-            <p className="text-xs text-gray-400">📈 Recharts line chart placeholder</p>
-          </div>
-        </div>
-
-        <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-          <h3 className="text-lg font-bold mb-4">RAG Retrieval Quality</h3>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-gray-400">Avg Similarity</span>
-              <span className="font-mono">0.78</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Success Rate</span>
-              <span className="font-mono">96.2%</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-400">Avg Retrieval Time</span>
-              <span className="font-mono">52ms</span>
-            </div>
-          </div>
+        <div className="mt-6 md:mt-0 grid grid-cols-2 gap-3 self-start">
+          <MetricPill label="Role" value={userRole} />
+          <MetricPill label="Decisions" value={decisions.length} />
+          <MetricPill label="API" value={API_BASE} wide />
+          <MetricPill label="Status" value={loading ? 'Loading' : 'Ready'} />
         </div>
       </div>
 
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <h3 className="text-lg font-bold mb-4">System Status</h3>
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span>PostgreSQL</span>
-            <span className="w-3 h-3 bg-green-500 rounded-full"></span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>Redis</span>
-            <span className="w-3 h-3 bg-green-500 rounded-full"></span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>Ollama / LLM Verifier</span>
-            <span className="w-3 h-3 bg-yellow-500 rounded-full"></span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>FAISS Index</span>
-            <span className="w-3 h-3 bg-green-500 rounded-full"></span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+      {error && <InlineError message={error} />}
 
-/**
- * Policy View: Decision policy profile management (SOC_ADMIN only)
- * 
- * TODO: Connect to /v1/policy/profiles endpoint
- * TODO: Display current active policy profile
- * TODO: Allow creation/editing of policy profiles
- * TODO: Show threshold and weight configurations
- * TODO: Implement policy activation UI
- */
-function PolicyView() {
-  return (
-    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-      <h2 className="text-2xl font-bold mb-6 flex items-center space-x-2">
-        <Settings className="w-6 h-6" />
-        <span>Policy Profiles (SOC_ADMIN)</span>
-      </h2>
-
-      <div className="bg-blue-900 bg-opacity-20 border border-blue-700 rounded p-4 mb-6">
-        <div className="flex items-start space-x-2">
-          <AlertCircle className="w-5 h-5 text-blue-400 mt-0.5" />
-          <div className="text-sm">
-            <div className="font-semibold">Active Profile: default</div>
-            <div className="text-gray-400 mt-1">Standard SOC policy with balanced thresholds</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        {['default', 'aggressive', 'lenient', 'critical_response'].map(profile => (
-          <div key={profile} className="bg-gray-700 rounded p-4 border border-gray-600">
-            <div className="flex justify-between items-start mb-3">
-              <div>
-                <div className="font-semibold capitalize">{profile}</div>
-                <div className="text-sm text-gray-400">Thresholds and weights...</div>
-              </div>
-              <button className="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-sm transition">
-                Edit
-              </button>
-            </div>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {['ALLOW', 'FLAG', 'BLOCK', 'CORRECT'].map((outcome) => (
+          <OutcomeCard key={outcome} outcome={outcome} value={outcomes?.[outcome] || 0} />
         ))}
       </div>
 
-      <button className="mt-6 w-full bg-green-600 hover:bg-green-700 rounded px-4 py-2 font-medium transition">
-        + Create New Policy
-      </button>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <SectionCard title="Outcome Distribution" icon={<BarChart3 className="w-5 h-5 text-cyan-300" />}>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={outcomeData} dataKey="value" nameKey="name" innerRadius={70} outerRadius={100} paddingAngle={3}>
+                  {outcomeData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.fill} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16 }} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Validation Latency" icon={<CheckCircle2 className="w-5 h-5 text-cyan-300" />}>
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <StatBox label="p50" value={`${performance?.validation_latency_p50_ms ?? 0} ms`} />
+            <StatBox label="p95" value={`${performance?.validation_latency_p95_ms ?? 0} ms`} />
+            <StatBox label="p99" value={`${performance?.validation_latency_p99_ms ?? 0} ms`} />
+          </div>
+          <div className="h-44 rounded-2xl bg-slate-950/40 border border-white/10 p-3">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={decisions.map((d, idx) => ({ idx: idx + 1, risk: d.risk_score }))}>
+                <defs>
+                  <linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.45} />
+                    <stop offset="95%" stopColor="#22d3ee" stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                <XAxis dataKey="idx" stroke="#94a3b8" />
+                <YAxis stroke="#94a3b8" domain={[0, 1]} />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16 }} />
+                <Area type="monotone" dataKey="risk" stroke="#22d3ee" fill="url(#riskFill)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </SectionCard>
+      </div>
+
+      <SectionCard title="Recent Decisions" icon={<Shield className="w-5 h-5 text-cyan-300" />}>
+        <div className="space-y-3">
+          {decisions.length === 0 ? (
+            <EmptyState text={loading ? 'Loading decisions...' : 'No decisions yet. Run a validation to populate the feed.'} />
+          ) : (
+            decisions.slice(0, 6).map((decision) => <DecisionRow key={decision.decision_id} decision={decision} compact />)
+          )}
+        </div>
+      </SectionCard>
     </div>
   );
 }
 
-/**
- * Settings View: User preferences and JWT token management
- * 
- * TODO: Display current user role and permissions
- * TODO: Allow JWT token regeneration
- * TODO: Show audit log of user actions
- * TODO: Implement theme switcher (dark/light)
- * TODO: Display API documentation links
- */
-function SettingsView() {
+function DecisionsView({ userRole }) {
+  const { loading, error, decisions, setDecisions } = useGatewayData();
+  const [alertId, setAlertId] = useState('');
+  const [outcome, setOutcome] = useState('');
+  const [selectedDecision, setSelectedDecision] = useState(null);
+  const [overrideOutcome, setOverrideOutcome] = useState('BLOCK');
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideSuggestion, setOverrideSuggestion] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [actionSuccess, setActionSuccess] = useState('');
+
+  async function search() {
+    try {
+      const params = new URLSearchParams();
+      if (alertId.trim()) params.set('alert_id', alertId.trim());
+      if (outcome) params.set('outcome', outcome);
+      const response = await http.get(`/decisions?${params.toString()}`);
+      setDecisions(response.data);
+    } catch (err) {
+      setActionError(err?.response?.data?.detail || err.message || 'Unable to load decisions');
+    }
+  }
+
+  async function loadDetail(decisionId) {
+    try {
+      const response = await http.get(`/decisions/${decisionId}`);
+      setSelectedDecision(response.data);
+      setActionError('');
+      setActionSuccess('');
+    } catch (err) {
+      setActionError(err?.response?.data?.detail || err.message || 'Unable to load decision detail');
+    }
+  }
+
+  async function submitOverride() {
+    if (!selectedDecision) return;
+    try {
+      const response = await http.post('/policy/override', {
+        decision_id: selectedDecision.decision_id,
+        new_outcome: overrideOutcome,
+        rationale: overrideReason,
+        correction_suggestion: overrideSuggestion || null,
+      });
+      setActionSuccess(`Override saved: ${response.data.new_outcome}`);
+      const refreshed = await http.get(`/decisions/${selectedDecision.decision_id}`);
+      setSelectedDecision(refreshed.data);
+      const listResp = await http.get('/decisions?limit=25');
+      setDecisions(listResp.data);
+    } catch (err) {
+      setActionError(err?.response?.data?.detail || err.message || 'Override failed');
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold">Settings</h2>
-
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <h3 className="text-lg font-bold mb-4">User Profile</h3>
-        <div className="space-y-3">
-          <div>
-            <label className="text-sm text-gray-400">Username</label>
-            <div className="text-base mt-1">analyst@company.com</div>
-          </div>
-          <div>
-            <label className="text-sm text-gray-400">Role</label>
-            <div className="text-base mt-1">SOC_ANALYST</div>
-          </div>
+      <SectionCard title="Decision History" icon={<ChevronRight className="w-5 h-5 text-cyan-300" />}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <input className="input-shell" value={alertId} onChange={(e) => setAlertId(e.target.value)} placeholder="Alert ID" />
+          <select className="input-shell" value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+            <option value="">All outcomes</option>
+            {['ALLOW', 'FLAG', 'BLOCK', 'CORRECT'].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+          <button className="btn-primary" onClick={search}>Search</button>
         </div>
-      </div>
 
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <h3 className="text-lg font-bold mb-4">API Token</h3>
-        <div className="bg-gray-700 rounded p-3 font-mono text-sm text-yellow-300 break-all">
-          eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+        {(error || actionError) && <InlineError message={error || actionError} />}
+        {actionSuccess && <InlineSuccess message={actionSuccess} />}
+
+        <div className="mt-5 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-slate-400 border-b border-white/10">
+              <tr>
+                <th className="text-left py-3">Decision</th>
+                <th className="text-left py-3">Alert</th>
+                <th className="text-left py-3">Outcome</th>
+                <th className="text-left py-3">Risk</th>
+                <th className="text-left py-3">Created</th>
+                <th className="text-left py-3">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td className="py-6 text-slate-400" colSpan="6">Loading decisions...</td></tr>
+              ) : decisions.length === 0 ? (
+                <tr><td className="py-6 text-slate-400" colSpan="6">No decisions available.</td></tr>
+              ) : decisions.map((decision) => (
+                <tr key={decision.decision_id} className="border-b border-white/5 hover:bg-white/5">
+                  <td className="py-3 font-mono text-xs">{decision.decision_id.slice(0, 12)}...</td>
+                  <td className="py-3">{decision.alert_id}</td>
+                  <td className="py-3"><OutcomeBadge outcome={decision.outcome} /></td>
+                  <td className="py-3 font-mono">{Number(decision.risk_score).toFixed(2)}</td>
+                  <td className="py-3 text-slate-400 text-xs">{decision.created_at}</td>
+                  <td className="py-3"><button className="text-cyan-300 hover:underline" onClick={() => loadDetail(decision.decision_id)}>View</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <button className="mt-4 px-4 py-2 bg-orange-600 hover:bg-orange-700 rounded text-sm transition">
-          Regenerate Token
-        </button>
-      </div>
+      </SectionCard>
 
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <h3 className="text-lg font-bold mb-4">Resources</h3>
-        <ul className="space-y-2 text-sm">
-          <li>
-            <a href="http://localhost:8000/docs" className="text-blue-400 hover:text-blue-300">
-              → API Documentation (Swagger)
-            </a>
-          </li>
-          <li>
-            <a href="http://localhost:9090" className="text-blue-400 hover:text-blue-300">
-              → Prometheus Metrics
-            </a>
-          </li>
-          <li>
-            <a href="http://localhost:3000/grafana" className="text-blue-400 hover:text-blue-300">
-              → Grafana Dashboards
-            </a>
-          </li>
-        </ul>
+      {selectedDecision && (
+        <SectionCard title={`Decision Detail: ${selectedDecision.decision_id.slice(0, 12)}...`} icon={<AlertCircle className="w-5 h-5 text-cyan-300" />}>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <DetailBlock label="Alert ID" value={selectedDecision.alert_id} />
+              <DetailBlock label="Outcome" value={selectedDecision.outcome} />
+              <DetailBlock label="Risk Score" value={selectedDecision.risk_score} />
+              <DetailBlock label="Rationale" value={selectedDecision.analyst_rationale} />
+              <DetailBlock label="Override" value={selectedDecision.analyst_override || 'None'} />
+            </div>
+            {userRole === 'SOC_ADMIN' && (
+              <div className="space-y-3 rounded-2xl border border-white/10 bg-slate-950/40 p-4">
+                <h3 className="text-lg font-semibold">Override Flow</h3>
+                <select className="input-shell" value={overrideOutcome} onChange={(e) => setOverrideOutcome(e.target.value)}>
+                  {['ALLOW', 'FLAG', 'BLOCK', 'CORRECT'].map((value) => <option key={value} value={value}>{value}</option>)}
+                </select>
+                <textarea className="input-shell min-h-[96px]" value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} placeholder="Override rationale" />
+                <input className="input-shell" value={overrideSuggestion} onChange={(e) => setOverrideSuggestion(e.target.value)} placeholder="Correction suggestion (optional)" />
+                <button className="btn-primary w-full" onClick={submitOverride}>Submit Override</button>
+              </div>
+            )}
+          </div>
+        </SectionCard>
+      )}
+    </div>
+  );
+}
+
+function MetricsView() {
+  const { performance, decisions } = useGatewayData();
+  const trendData = decisions.slice(0, 10).reverse().map((decision, index) => ({ label: `#${index + 1}`, risk: decision.risk_score }));
+
+  return (
+    <div className="space-y-6">
+      <SectionCard title="System Metrics" icon={<BarChart3 className="w-5 h-5 text-cyan-300" />}>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatBox label="p50 latency" value={`${performance?.validation_latency_p50_ms ?? 0} ms`} />
+          <StatBox label="p95 latency" value={`${performance?.validation_latency_p95_ms ?? 0} ms`} />
+          <StatBox label="p99 latency" value={`${performance?.validation_latency_p99_ms ?? 0} ms`} />
+          <StatBox label="Validations" value={performance?.total_validations ?? 0} />
+        </div>
+      </SectionCard>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <SectionCard title="Latency Trend" icon={<TriangleAlert className="w-5 h-5 text-cyan-300" />}>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={trendData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                <XAxis dataKey="label" stroke="#94a3b8" />
+                <YAxis stroke="#94a3b8" domain={[0, 1]} />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 16 }} />
+                <Area type="monotone" dataKey="risk" stroke="#f59e0b" fill="rgba(245,158,11,0.2)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Operational Health" icon={<CheckCircle2 className="w-5 h-5 text-cyan-300" />}>
+          <div className="space-y-3">
+            <HealthLine name="Gateway API" ok />
+            <HealthLine name="Validation engine" ok />
+            <HealthLine name="Decision engine" ok />
+            <HealthLine name="Audit hash-chain" ok />
+            <HealthLine name="RAG enrichment" ok={decisions.length > 0} />
+          </div>
+        </SectionCard>
       </div>
     </div>
   );
+}
+
+function PolicyView() {
+  const { profiles, setProfiles } = useGatewayData();
+  const [profileName, setProfileName] = useState('');
+  const [allowMin, setAllowMin] = useState(0.85);
+  const [flagMin, setFlagMin] = useState(0.6);
+  const [semanticThreshold, setSemanticThreshold] = useState(0.72);
+  const [active, setActive] = useState(false);
+  const [status, setStatus] = useState('');
+
+  async function createProfile() {
+    try {
+      const payload = {
+        name: profileName,
+        profile: {
+          weights: {
+            cve_validity: 0.4,
+            severity_accuracy: 0.3,
+            mitigation_relevance: 0.2,
+            urgency_consistency: 0.1,
+          },
+          thresholds: {
+            allow_min: Number(allowMin),
+            flag_min: Number(flagMin),
+          },
+          signal_defaults: {
+            cve_validity: 0.5,
+            severity_accuracy: 0.5,
+            mitigation_relevance: 0.5,
+            urgency_consistency: 0.5,
+          },
+          semantic_threshold: Number(semanticThreshold),
+          active: Boolean(active),
+        },
+      };
+      await http.post('/policy/profiles', payload);
+      const refreshed = await http.get('/policy/profiles');
+      setProfiles(refreshed.data.profiles || []);
+      setStatus('Profile created successfully');
+    } catch (err) {
+      setStatus(err?.response?.data?.detail || err.message || 'Failed to create profile');
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <SectionCard title="Policy Profiles" icon={<Settings className="w-5 h-5 text-cyan-300" />}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {profiles.length === 0 ? <EmptyState text="No policy profiles returned yet." /> : profiles.map((profile) => (
+            <div key={profile.name} className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 space-y-2">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="font-semibold">{profile.name}</div>
+                  <div className="text-xs text-slate-400">{profile.description}</div>
+                </div>
+                {profile.active && <span className="px-2 py-1 rounded-full text-xs bg-emerald-500/15 text-emerald-300 border border-emerald-400/20">Active</span>}
+              </div>
+              <pre className="text-xs text-slate-300 overflow-x-auto">{JSON.stringify(profile.thresholds, null, 2)}</pre>
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Create Profile" icon={<Lock className="w-5 h-5 text-cyan-300" />}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <input className="input-shell" value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="Profile name" />
+          <input className="input-shell" type="number" step="0.01" value={allowMin} onChange={(e) => setAllowMin(e.target.value)} placeholder="Allow threshold" />
+          <input className="input-shell" type="number" step="0.01" value={flagMin} onChange={(e) => setFlagMin(e.target.value)} placeholder="Flag threshold" />
+          <input className="input-shell" type="number" step="0.01" value={semanticThreshold} onChange={(e) => setSemanticThreshold(e.target.value)} placeholder="Semantic threshold" />
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active
+          </label>
+          <button className="btn-primary" onClick={createProfile}>Create</button>
+        </div>
+        {status && <div className="mt-3 text-sm text-slate-300">{status}</div>}
+      </SectionCard>
+    </div>
+  );
+}
+
+function SettingsView({ userRole, setUserRole, userId, setUserId }) {
+  const [token, setToken] = useState(localStorage.getItem('lhf-token') || '');
+  const [apiBase, setApiBase] = useState(API_BASE);
+  const [message, setMessage] = useState('');
+
+  function save() {
+    localStorage.setItem('lhf-token', token);
+    localStorage.setItem('lhf-api-base', apiBase);
+    setMessage('Saved locally. Refresh to apply token or API base changes.');
+  }
+
+  return (
+    <div className="space-y-6">
+      <SectionCard title="User Profile" icon={<Settings className="w-5 h-5 text-cyan-300" />}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <input className="input-shell" value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="User ID" />
+          <select className="input-shell" value={userRole} onChange={(e) => setUserRole(e.target.value)}>
+            {['SOC_ANALYST', 'SOC_ADMIN', 'SYSTEM'].map((role) => <option key={role}>{role}</option>)}
+          </select>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="API Access" icon={<Lock className="w-5 h-5 text-cyan-300" />}>
+        <div className="space-y-3">
+          <input className="input-shell" value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API base URL" />
+          <textarea className="input-shell min-h-[120px] font-mono text-xs" value={token} onChange={(e) => setToken(e.target.value)} placeholder="JWT token" />
+          <button className="btn-primary" onClick={save}>Save locally</button>
+          {message && <div className="text-sm text-slate-300">{message}</div>}
+        </div>
+      </SectionCard>
+
+      <SectionCard title="References" icon={<BarChart3 className="w-5 h-5 text-cyan-300" />}>
+        <ul className="space-y-2 text-sm text-cyan-200">
+          <li><a href="http://localhost:8000/docs" target="_blank" rel="noreferrer">API Documentation</a></li>
+          <li><a href="http://localhost:9090" target="_blank" rel="noreferrer">Prometheus</a></li>
+          <li><a href="http://localhost:3000" target="_blank" rel="noreferrer">Grafana</a></li>
+        </ul>
+      </SectionCard>
+    </div>
+  );
+}
+
+function OutcomeCard({ outcome, value }) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/5 p-5 shadow-lg shadow-black/15">
+      <div className="text-xs uppercase tracking-[0.35em] text-slate-400">{outcome}</div>
+      <div className="mt-2 text-3xl font-semibold" style={{ color: outcomePalette[outcome] }}>{value}</div>
+    </div>
+  );
+}
+
+function MetricPill({ label, value, wide = false }) {
+  return (
+    <div className={`rounded-2xl border border-white/10 bg-black/20 p-4 ${wide ? 'col-span-2' : ''}`}>
+      <div className="text-xs uppercase tracking-[0.35em] text-slate-400">{label}</div>
+      <div className="mt-1 text-sm md:text-base font-medium break-all">{value}</div>
+    </div>
+  );
+}
+
+function StatBox({ label, value }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="text-xs uppercase tracking-[0.35em] text-slate-400">{label}</div>
+      <div className="mt-2 text-lg font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function OutcomeBadge({ outcome }) {
+  return <span className="px-3 py-1 rounded-full text-xs border" style={{ color: outcomePalette[outcome], borderColor: `${outcomePalette[outcome]}55`, background: `${outcomePalette[outcome]}15` }}>{outcome}</span>;
+}
+
+function DecisionRow({ decision }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-slate-950/40 p-4 flex items-center justify-between gap-4 hover:bg-white/5 transition-colors">
+      <div>
+        <div className="font-mono text-sm">{decision.alert_id}</div>
+        <div className="text-xs text-slate-400">{decision.decision_id.slice(0, 12)}... · {decision.created_at}</div>
+      </div>
+      <div className="text-right">
+        <OutcomeBadge outcome={decision.outcome} />
+        <div className="mt-1 text-sm text-slate-300">Risk {Number(decision.risk_score).toFixed(2)}</div>
+      </div>
+    </div>
+  );
+}
+
+function DetailBlock({ label, value }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="text-xs uppercase tracking-[0.35em] text-slate-400">{label}</div>
+      <div className="mt-2 text-sm text-slate-100 break-words">{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</div>
+    </div>
+  );
+}
+
+function HealthLine({ name, ok }) {
+  return (
+    <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+      <span>{name}</span>
+      {ok ? <CheckCircle2 className="w-5 h-5 text-emerald-300" /> : <AlertTriangle className="w-5 h-5 text-amber-300" />}
+    </div>
+  );
+}
+
+function InlineError({ message }) {
+  return <div className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">{message}</div>;
+}
+
+function InlineSuccess({ message }) {
+  return <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>;
+}
+
+function EmptyState({ text }) {
+  return <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-4 py-8 text-center text-sm text-slate-400">{text}</div>;
 }
 
 export default App;

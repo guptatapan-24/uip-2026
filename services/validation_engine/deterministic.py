@@ -260,6 +260,10 @@ def _dict_range_matches(version_key: tuple[int, ...], cpe: dict[str, Any]) -> bo
     upper_inclusive = cpe.get("versionEndIncluding")
     upper_exclusive = cpe.get("versionEndExcluding")
 
+    # If no explicit range boundaries are provided, do not consider this a range match.
+    if not any([lower_inclusive, lower_exclusive, upper_inclusive, upper_exclusive]):
+        return False
+
     if lower_inclusive and version_key < _version_key(str(lower_inclusive)):
         return False
     if lower_exclusive and version_key <= _version_key(str(lower_exclusive)):

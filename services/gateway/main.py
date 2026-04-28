@@ -76,6 +76,15 @@ async def lifespan(app: FastAPI):
 
         logger.info("Core services verified")
 
+        try:
+            from db.orm import get_db_manager
+
+            db_manager = get_db_manager()
+            await db_manager.initialize()
+            logger.info("Gateway database manager initialized")
+        except Exception as db_error:
+            logger.warning(f"Database initialization skipped: {db_error}")
+
         # Load default policy profile
         default_profile = load_profile("default")
         logger.info(f"Default policy profile loaded with {len(default_profile.get('weights', {}))} signal weights")

@@ -23,6 +23,12 @@ Last updated: 2026-04-28
 - Implemented ATT&CK/KEV client cache-backed initialization and sync paths.
 - Implemented audit-log hash chain append + verify behavior with in-memory fallback and DB-ready methods.
 - Enhanced explainability report builder with rule trace, citations, confidence breakdown, and shared-model adapter.
+- Implemented LLM verifier mock mode plus OpenAI HTTP fallback and a structured verification result model.
+- Replaced the dashboard scaffold with live API-backed views for dashboard, decisions, metrics, policy, and settings.
+- Implemented Celery-based RAG sync orchestration for KEV, NVD, and ATT&CK with FAISS index refresh hooks.
+- Added DB-first gateway persistence helpers and wired decisions, audit, policy, and metrics routes to use PostgreSQL when available with in-memory fallback.
+- Added verifier unit coverage for mock and alias behavior.
+- Verified the dashboard production build with Vite after installing local dependencies.
 - Added robust compatibility fallbacks:
   - Optional Prometheus dependency handling in gateway startup.
   - Optional JWT dependency fallback for local/dev environments.
@@ -34,23 +40,17 @@ Last updated: 2026-04-28
   - `tests/integration/test_api_gateway.py`
   - `tests/integration/test_gateway_admin_routes.py`
   - `tests/unit/test_orchestration_next_steps.py`
-- Current result snapshot: `22 passed`.
+  - `tests/unit/test_llm_verifier.py`
+- Current verification snapshot: `19 passed` in the gateway integration suite; dashboard Vite build is green.
 
 ## Remaining major components
 
-- Implement DB-backed persistence for gateway routes (replace in-memory runtime state):
-  - decisions history queries
-  - policy overrides table writes
-  - metrics aggregation from persisted data
-- Wire `services/gateway/routes/*` to `db/orm.py` async sessions and migrations runtime.
-- Complete `services/validation_engine/llm_verifier.py` OpenAI fallback implementation and add tests.
-- Implement `services/rag_pipeline/sync_jobs.py` scheduled sync orchestration and index refresh hooks.
-- Expand dashboard integration to consume live gateway endpoints and add override workflow UX.
+- Expand dashboard integration further with chart components, richer detail drawers, and pagination if desired.
+- Add the end-to-end test: `extract -> validate -> decide -> override -> audit verify` using auth role overrides.
 - Add CI pipeline steps for integration test matrix with optional dependency profiles (minimal/full).
 
 ## Immediate next actions (ordered)
 
-1. Introduce gateway DB repository layer (async) and switch `decisions`, `audit`, `policy`, `metrics` routes to DB-first with in-memory fallback.
-2. Complete and test `llm_verifier` fallback path and circuit-breaker observability.
-3. Add end-to-end test: `extract -> validate -> decide -> override -> audit verify` using auth role overrides.
-4. Start dashboard API wiring for decisions table, metrics cards, and override action.
+1. Add end-to-end test: `extract -> validate -> decide -> override -> audit verify` using auth role overrides.
+2. Add CI pipeline steps for integration test matrix with optional dependency profiles.
+3. Expand the dashboard with richer charts and drill-down interactions if more analyst UX is needed.

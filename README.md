@@ -398,6 +398,53 @@ Integration points marked with `TODO:` comments in code.
 
 Proprietary - Unisys Corporation
 
+## Progress & Next Steps (snapshot: 2026-04-28)
+
+This project is actively developed. Below is a concise, actionable summary of what is implemented, what's remaining, and recommended next steps.
+
+- **Completion (rough):** Backend core flow ~85% complete; verifier & RAG ~80%; frontend dashboard ~70%; testing & CI ~60%; infra & observability ~50%.
+
+- **Key implemented features (files / modules):**
+  - **Gateway runtime & persistence:** `services/gateway/persistence.py`, `services/gateway/state.py` (DB-first with in-memory fallback).
+  - **Gateway routes:** `services/gateway/routes/decide.py`, `decisions.py`, `audit.py`, `policy.py`, `metrics.py` (decisioning, audit, overrides, metrics).
+  - **Audit log:** `services/audit/audit_log.py` (SHA-256 hash-chained append & verify; in-memory fallback).
+  - **Decision engine:** `services/decision_engine/engine.py` (policy profiles in `config/policy_profiles.yaml`).
+  - **Validation engine:** `services/validation_engine/deterministic.py` (CVE/CVSS/ATT&CK/version rules) and `services/validation_engine/llm_verifier.py` (mock + fallback patterns).
+  - **Claim extractor:** `services/claim_extractor/extractor.py` and `services/claim_extractor/models.py` (regex, spaCy, BERT fallback; async + legacy bridge).
+  - **RAG pipeline & FAISS:** `services/rag_pipeline/*` and `services/rag_pipeline/sync_jobs.py` (indexing + Celery sync tasks).
+  - **DB ORM:** `db/orm.py` (SQLAlchemy async models and manager).
+  - **Frontend fixes:** `dashboard/src/App.jsx` and supporting files — Vite build validated.
+  - **Tests:** multiple unit and integration tests fixed; `llm-hallucination-firewall/tests/unit` currently passing locally (18 passed).
+
+- **Remaining / Open work (prioritized):**
+  1. Implement an end-to-end integration test covering: extract → validate → decide → override → audit verify (high priority).
+  2. Add CI workflow with two profiles (minimal vs full): install minimal deps for quick tests; full profile runs all tests + dashboard build.
+  3. Resolve pytest collection collisions (duplicate test basenames across subfolders) or scope tests per-subproject in CI.
+  4. Finalize DB migrations and production persistence for SQLAlchemy tables and ensure DB-first flows run in the full profile.
+  5. Persist FAISS indexes to durable storage and make rebuild jobs incremental/resumable.
+  6. Dashboard UX: charts, pagination, auth flows, policy profile management UI.
+  7. Observability: enable Prometheus metrics when dependency present, add Grafana dashboards into infra manifests.
+  8. Security: finalize JWT auth, RBAC enforcement in gateway routes, and rotateable secrets management.
+
+- **Recommended immediate next actions:**
+  - Implement the E2E integration test (adds high confidence for the full pipeline).
+  - Add a GitHub Actions workflow with a matrix for minimal/full profiles (run unit tests + integration/E2E in full job, run dashboard build in full job).
+  - In CI, run tests per-subproject (avoid cross-folder import collisions) or rename conflicting test files.
+
+- **How to reproduce local test runs (quick):**
+  ```powershell
+  # Activate venv
+  & .\.venv\Scripts\Activate.ps1
+  # Install requirements
+  & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+  & .\.venv\Scripts\python.exe -m pip install pytest-asyncio
+  # Run all tests (may need to adjust PYTHONPATH or run per-subproject)
+  $env:PYTHONPATH='f:\uip-2026'
+  & .\.venv\Scripts\python.exe -m pytest -q
+  ```
+
+If you'd like, I can implement the E2E test next and/or add a CI workflow draft — tell me which and I'll proceed.
+
 ## Support
 
 For issues and questions:

@@ -2,8 +2,8 @@
 Unit tests for ClaimExtractor pipeline.
 """
 import pytest
-from claim_extractor.extractor import ClaimExtractor
-from claim_extractor.models import ClaimRequest
+from services.claim_extractor.extractor import ClaimExtractor
+from services.claim_extractor.models import ClaimRequest
 
 @pytest.mark.asyncio
 def test_valid_cve_extraction():
@@ -36,6 +36,6 @@ def test_attack_id_extraction():
 @pytest.mark.asyncio
 def test_empty_input():
     extractor = ClaimExtractor()
-    req = ClaimRequest(text="")
+    req = ClaimRequest(text=" ")
     resp = extractor.extract(req)
     assert resp.claims == []

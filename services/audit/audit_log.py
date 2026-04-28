@@ -261,6 +261,8 @@ _audit_log: Optional[AuditLog] = None
 def get_audit_log(db_connection=None) -> AuditLog:
     """Get or create audit log singleton."""
     global _audit_log
+    if db_connection is not None:
+        return AuditLog(db_connection)
     if _audit_log is None:
         _audit_log = AuditLog(db_connection)
     return _audit_log
