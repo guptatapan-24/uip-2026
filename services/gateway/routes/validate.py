@@ -20,6 +20,8 @@ from services.validation_engine.deterministic import (
     version_in_affected_range,
 )
 from services.validation_engine.semantic import SemanticScorer
+from services.gateway.rag_integration import get_rag_pipeline
+from services.gateway.state import get_gateway_state
 
 from models import ValidateRequest, ValidateResponse, RuleResultResponse
 
@@ -211,6 +213,36 @@ async def validate_endpoint(request: ValidateRequest) -> ValidateResponse:
         nvd_data = request.nvd_data or {}
         attack_data = request.attack_data or {}
 
+        # Enrich from RAG sources when caller did not provide authoritative payloads.
+        if not nvd_data or not attack_data:
+            rag_pipeline = get_rag_pipeline()
+
+            cve_claims = []
+            attack_claims = []
+            for item in extracted:
+                claim_type = item.get("claim_type") if isinstance(item, dict) else getattr(item, "claim_type", None)
+                value = item.get("extracted_value") if isinstance(item, dict) else getattr(item, "extracted_value", None)
+                if claim_type == "cve" and value:
+                    cve_claims.append(str(value))
+                elif claim_type == "attack_id" and value:
+                    attack_claims.append(str(value))
+
+            if not nvd_data and cve_claims:
+                # Deterministic validators support multiple payload shapes; we pass the first
+                # successfully retrieved record and let validation degrade gracefully if empty.
+                for cve_id in cve_claims:
+                    candidate = await rag_pipeline.retrieve_cve_data(cve_id)
+                    if candidate:
+                        nvd_data = candidate
+                        break
+
+            if not attack_data and attack_claims:
+                for technique_id in attack_claims:
+                    candidate = await rag_pipeline.retrieve_attack_technique(technique_id)
+                    if candidate:
+                        attack_data = candidate
+                        break
+
         # Run deterministic validations
         det_results = await run_deterministic_validations(extracted, nvd_data, attack_data)
 
@@ -220,6 +252,7 @@ async def validate_endpoint(request: ValidateRequest) -> ValidateResponse:
         )
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
+        get_gateway_state().record_validation_latency(elapsed_ms)
 
         return ValidateResponse(
             alert_id=request.context.alert_id,

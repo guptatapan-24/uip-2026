@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from services.decision_engine.engine import decide
 from services.common.models import RuleResult, RuleSignal
+from services.audit.audit_log import get_audit_log
+from services.gateway.state import StoredDecision, get_gateway_state
 
 from models import DecideRequest, DecisionResponse, CorrectionCandidateResponse
 
@@ -71,8 +74,37 @@ async def decide_endpoint(request: DecideRequest) -> DecisionResponse:
             )
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
+        decision_id = str(uuid.uuid4())
+
+        # Persist decision for history/metrics/policy routes until DB layer is wired.
+        get_gateway_state().add_decision(
+            StoredDecision(
+                decision_id=decision_id,
+                alert_id=request.alert_id,
+                llm_output="",
+                outcome=decision_result.outcome,
+                risk_score=decision_result.risk_score,
+                validation_results=[r.model_dump() for r in request.validation_results],
+                analyst_rationale=decision_result.rationale,
+                created_at=datetime.now(timezone.utc).isoformat(),
+                created_by="system",
+            )
+        )
+        await get_audit_log().append(
+            decision_id=decision_id,
+            record_data={
+                "type": "decision",
+                "decision_id": decision_id,
+                "alert_id": request.alert_id,
+                "outcome": decision_result.outcome,
+                "risk_score": decision_result.risk_score,
+                "applied_profile": decision_result.applied_profile,
+                "hard_fail_rule_ids": decision_result.hard_fail_rule_ids,
+            },
+        )
 
         return DecisionResponse(
+            decision_id=decision_id,
             alert_id=request.alert_id,
             outcome=decision_result.outcome,
             risk_score=decision_result.risk_score,

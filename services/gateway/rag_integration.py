@@ -23,6 +23,20 @@ class RAGPipeline:
         self._attack_client = None
         self._kev_client = None
 
+    async def _ensure_clients(self) -> None:
+        if self._nvd_client is None:
+            from services.rag_pipeline.nvd_client import get_nvd_client
+
+            self._nvd_client = await get_nvd_client()
+        if self._attack_client is None:
+            from services.rag_pipeline.attack_client import get_attack_client
+
+            self._attack_client = await get_attack_client()
+        if self._kev_client is None:
+            from services.rag_pipeline.kev_client import get_kev_client
+
+            self._kev_client = await get_kev_client()
+
     async def retrieve_cve_data(self, cve_id: str) -> dict[str, Any]:
         """
         Retrieve all available NVD data for a CVE.
@@ -38,14 +52,30 @@ class RAGPipeline:
         """
         try:
             logger.info(f"Retrieving NVD data for {cve_id}")
-            # TODO: Integrate with services/rag_pipeline/nvd_client.py
-            # For now, return stub that deterministic validators handle gracefully
+            await self._ensure_clients()
+            record = await self._nvd_client.get_cve(cve_id)
+            if record is not None:
+                return {
+                    "cve_id": record.cve_id,
+                    "cvss_score": record.cvss_v3_score,
+                    "affected_versions": record.affected_products,
+                    "references": [],
+                    "source": "nvd",
+                    "vulnerabilities": [
+                        {
+                            "cve": {
+                                "id": record.cve_id,
+                            }
+                        }
+                    ],
+                }
+
             return {
                 "cve_id": cve_id,
                 "cvss_score": None,
                 "affected_versions": [],
                 "references": [],
-                "source": "nvd_stub",
+                "source": "nvd_empty",
             }
         except Exception as e:
             logger.error(f"NVD retrieval error for {cve_id}: {e}")
@@ -66,13 +96,27 @@ class RAGPipeline:
         """
         try:
             logger.info(f"Retrieving ATT&CK data for {technique_id}")
-            # TODO: Integrate with services/rag_pipeline/attack_client.py
+            await self._ensure_clients()
+            technique = await self._attack_client.get_technique(technique_id)
+            if technique:
+                return {
+                    "technique_id": technique_id,
+                    "name": technique.get("name"),
+                    "tactics": [
+                        phase.get("phase_name")
+                        for phase in technique.get("kill_chain_phases", [])
+                        if isinstance(phase, dict)
+                    ],
+                    "platforms": technique.get("x_mitre_platforms", []),
+                    "source": "attack",
+                    "techniques": [technique_id],
+                }
             return {
                 "technique_id": technique_id,
                 "name": None,
                 "tactics": [],
                 "platforms": [],
-                "source": "attack_stub",
+                "source": "attack_empty",
             }
         except Exception as e:
             logger.error(f"ATT&CK retrieval error for {technique_id}: {e}")
@@ -93,12 +137,23 @@ class RAGPipeline:
         """
         try:
             logger.info(f"Checking KEV status for {cve_id}")
-            # TODO: Integrate with services/rag_pipeline/kev_client.py
+            await self._ensure_clients()
+            kev_info = await self._kev_client.get_kev_info(cve_id)
+            if kev_info:
+                return {
+                    "cve_id": cve_id,
+                    "is_exploited": True,
+                    "date_added": kev_info.get("dateAdded"),
+                    "source": "kev",
+                    "known_ransomware_campaign_use": kev_info.get(
+                        "knownRansomwareCampaignUse"
+                    ),
+                }
             return {
                 "cve_id": cve_id,
                 "is_exploited": False,
                 "date_added": None,
-                "source": "kev_stub",
+                "source": "kev_empty",
             }
         except Exception as e:
             logger.error(f"KEV lookup error for {cve_id}: {e}")

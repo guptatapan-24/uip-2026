@@ -12,14 +12,34 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from prometheus_client import Counter, Histogram, generate_latest
+
+try:
+    from prometheus_client import Counter, Histogram, generate_latest
+except ImportError:  # pragma: no cover - fallback for minimal local envs
+    class _NoopMetric:
+        def labels(self, **kwargs):
+            return self
+
+        def inc(self):
+            return None
+
+    def Counter(*args, **kwargs):
+        return _NoopMetric()
+
+    def Histogram(*args, **kwargs):
+        return _NoopMetric()
+
+    def generate_latest(*args, **kwargs):
+        return b""
 
 from config import get_config, setup_logging
 
 # Import route modules
-from routes import extract, validate, decide, health
+from routes import extract, validate, decide, health, decisions, audit, policy, metrics
 
 # Configure logging and get config
 config = get_config()
@@ -113,11 +133,24 @@ async def log_and_metrics_middleware(request: Request, call_next):
     return response
 
 
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return 400 for malformed request payloads for compatibility with existing tests/clients."""
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
+
+
 # Include routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(extract.router, prefix="/api/v1", tags=["Extraction"])
 app.include_router(validate.router, prefix="/api/v1", tags=["Validation"])
 app.include_router(decide.router, prefix="/api/v1", tags=["Decision"])
+app.include_router(decisions.router, prefix="/api/v1", tags=["Decisions"])
+app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
+app.include_router(policy.router, prefix="/api/v1", tags=["Policy"])
+app.include_router(metrics.router, prefix="/api/v1", tags=["Metrics"])
 
 
 # Metrics endpoint
@@ -140,6 +173,10 @@ async def root():
             "extract": "/api/v1/extract",
             "validate": "/api/v1/validate",
             "decide": "/api/v1/decide",
+            "decisions": "/api/v1/decisions",
+            "audit": "/api/v1/audit/log",
+            "policy": "/api/v1/policy/profiles",
+            "metrics": "/api/v1/metrics/performance",
         },
     }
 

@@ -9,6 +9,8 @@ Source: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabi
 
 import json
 import os
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -28,11 +30,24 @@ class KEVClient:
         self.cache_dir = os.getenv("KEV_CACHE_DIR", "/data/kev_cache")
         self.sync_interval_days = int(os.getenv("KEV_SYNC_INTERVAL_DAYS", "1"))
         self.kev_data: Dict[str, Dict] = {}
+        self._cache_file = Path(self.cache_dir) / "kev.json"
 
     async def initialize(self):
         """Load KEV data from cache or API."""
-        # TODO: Load from cache or sync from CISA
-        pass
+        Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
+        cache_is_fresh = False
+
+        if self._cache_file.exists():
+            age_seconds = datetime.now().timestamp() - self._cache_file.stat().st_mtime
+            cache_is_fresh = age_seconds < self.sync_interval_days * 86400
+
+        if cache_is_fresh:
+            self._load_from_cache()
+            return
+
+        synced = await self.sync_data()
+        if not synced and self._cache_file.exists():
+            self._load_from_cache()
 
     async def get_kev_info(self, cve_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -76,7 +91,7 @@ class KEVClient:
         """
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(self.api_url)
+                response = await client.get(self.api_url, timeout=30)
                 response.raise_for_status()
                 data = response.json()
 
@@ -85,11 +100,23 @@ class KEVClient:
                     entry["cveID"]: entry for entry in data.get("vulnerabilities", [])
                 }
 
+                Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
+                self._cache_file.write_text(json.dumps(data), encoding="utf-8")
+
                 return True
 
         except Exception as e:
             print(f"KEV sync failed: {e}")
             return False
+
+    def _load_from_cache(self) -> None:
+        try:
+            data = json.loads(self._cache_file.read_text(encoding="utf-8"))
+            self.kev_data = {
+                entry["cveID"]: entry for entry in data.get("vulnerabilities", [])
+            }
+        except Exception:
+            self.kev_data = {}
 
 
 # Singleton

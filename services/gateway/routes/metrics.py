@@ -6,11 +6,13 @@ Provides operational metrics: validation latency, decision distribution,
 threat intel retrieval performance, etc.
 """
 
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from auth import CurrentUser, get_current_user
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from services.gateway.state import get_gateway_state
 
 router = APIRouter()
 
@@ -53,15 +55,32 @@ async def get_performance_metrics(
     Returns:
         Performance metrics snapshot
     """
-    # TODO: Query Prometheus or in-memory metrics store
+    latencies = get_gateway_state().get_latency_window(time_window_minutes)
+    if not latencies:
+        return PerformanceMetrics(
+            validation_latency_p50_ms=0.0,
+            validation_latency_p95_ms=0.0,
+            validation_latency_p99_ms=0.0,
+            avg_validation_latency_ms=0.0,
+            total_validations=0,
+            validations_per_minute=0.0,
+        )
+
+    sorted_lats = sorted(latencies)
+
+    def percentile(values: list[float], p: float) -> float:
+        if not values:
+            return 0.0
+        index = int((len(values) - 1) * p)
+        return values[index]
 
     return PerformanceMetrics(
-        validation_latency_p50_ms=150.0,
-        validation_latency_p95_ms=500.0,
-        validation_latency_p99_ms=1200.0,
-        avg_validation_latency_ms=300.0,
-        total_validations=0,
-        validations_per_minute=0.0,
+        validation_latency_p50_ms=round(percentile(sorted_lats, 0.50), 2),
+        validation_latency_p95_ms=round(percentile(sorted_lats, 0.95), 2),
+        validation_latency_p99_ms=round(percentile(sorted_lats, 0.99), 2),
+        avg_validation_latency_ms=round(sum(latencies) / len(latencies), 2),
+        total_validations=len(latencies),
+        validations_per_minute=round(len(latencies) / max(1, time_window_minutes), 4),
     )
 
 
@@ -80,9 +99,17 @@ async def get_outcome_metrics(
     Returns:
         {"ALLOW": int, "FLAG": int, "BLOCK": int, "CORRECT": int}
     """
-    # TODO: Aggregate decision outcomes from database
+    threshold = datetime.now(timezone.utc) - timedelta(minutes=time_window_minutes)
+    counts = {"ALLOW": 0, "FLAG": 0, "BLOCK": 0, "CORRECT": 0}
 
-    return {"ALLOW": 0, "FLAG": 0, "BLOCK": 0, "CORRECT": 0}
+    for decision in get_gateway_state().list_decisions():
+        created_at = datetime.fromisoformat(decision.created_at.replace("Z", "+00:00"))
+        if created_at < threshold:
+            continue
+        if decision.outcome in counts:
+            counts[decision.outcome] += 1
+
+    return counts
 
 
 @router.get("/metrics/rag-quality", summary="Get RAG retrieval quality metrics")
@@ -103,11 +130,23 @@ async def get_rag_metrics(
             "avg_retrieval_latency_ms": float
         }
     """
-    # TODO: Query FAISS metrics from rag_pipeline
+    decisions = get_gateway_state().list_decisions()
+    total = len(decisions)
+    if total == 0:
+        return {
+            "avg_similarity_score": 0.0,
+            "retrieval_success_rate": 0.0,
+            "index_size_mb": 0.0,
+            "avg_retrieval_latency_ms": 0.0,
+        }
+
+    # Proxy metrics until FAISS-specific telemetry is wired.
+    has_validation_payload = sum(1 for d in decisions if d.validation_results)
+    success_rate = has_validation_payload / total
 
     return {
-        "avg_similarity_score": 0.75,
-        "retrieval_success_rate": 0.95,
-        "index_size_mb": 512.0,
-        "avg_retrieval_latency_ms": 50.0,
+        "avg_similarity_score": 0.0,
+        "retrieval_success_rate": round(success_rate, 4),
+        "index_size_mb": 0.0,
+        "avg_retrieval_latency_ms": 0.0,
     }

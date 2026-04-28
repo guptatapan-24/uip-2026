@@ -17,7 +17,9 @@ TODO: Wire Tanushree's, Tapan's, and Dhruv's modules for comprehensive evidence
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from services.common.models import DecisionResult, RuleResult
 
 
 class ValidationStep(BaseModel):
@@ -38,15 +40,19 @@ class ExplainabilityReport(BaseModel):
     risk_score: float
 
     # Validation evidence
-    validation_chain: List[ValidationStep] = []
-    threat_intel_matches: List[Dict] = []
+    validation_chain: List[ValidationStep] = Field(default_factory=list)
+    rule_trace: List[Dict] = Field(default_factory=list)
+    threat_intel_matches: List[Dict] = Field(default_factory=list)
+    citations: List[str] = Field(default_factory=list)
 
     # Component breakdown
-    component_scores: Dict[str, float] = {}
+    component_scores: Dict[str, float] = Field(default_factory=dict)
+    confidence_breakdown: Dict[str, float] = Field(default_factory=dict)
 
     # Analyst guidance
     analyst_rationale: str
     recommended_action: str  # "APPROVE", "INVESTIGATE", "BLOCK", "APPLY_CORRECTION"
+    override_available: bool = False
 
     # Metadata
     generated_at: str
@@ -71,6 +77,7 @@ class ReportBuilder:
         threat_intel_matches: List[Dict],
         component_scores: Dict[str, float],
         processing_latency_ms: float,
+        override_available: bool = False,
     ) -> ExplainabilityReport:
         """
         Build comprehensive explainability report.
@@ -89,6 +96,11 @@ class ReportBuilder:
         """
         # Build validation chain
         validation_chain = self._build_validation_chain(validation_results)
+        rule_trace = self._build_rule_trace(validation_results)
+        citations = self._extract_citations(validation_results, threat_intel_matches)
+        confidence_breakdown = self._build_confidence_breakdown(
+            validation_chain, component_scores
+        )
 
         # Select analyst rationale
         rationale = self._generate_rationale(
@@ -103,12 +115,51 @@ class ReportBuilder:
             outcome=outcome,
             risk_score=risk_score,
             validation_chain=validation_chain,
+            rule_trace=rule_trace,
             threat_intel_matches=threat_intel_matches,
+            citations=citations,
             component_scores=component_scores,
+            confidence_breakdown=confidence_breakdown,
             analyst_rationale=rationale,
             recommended_action=recommended_action,
+            override_available=override_available,
             generated_at=datetime.now().isoformat(),
             processing_latency_ms=processing_latency_ms,
+        )
+
+    async def build_report_from_models(
+        self,
+        decision_id: str,
+        decision: DecisionResult,
+        validation_results: list[RuleResult],
+        threat_intel_matches: list[dict],
+        processing_latency_ms: float,
+        override_available: bool = False,
+    ) -> ExplainabilityReport:
+        """Compatibility helper that consumes shared service model objects."""
+        validation_dicts = [
+            {
+                "stage": "validation",
+                "rule_name": result.rule_id,
+                "passed": result.passed,
+                "evidence": result.evidence,
+                "confidence": result.confidence,
+                "rule_id": result.rule_id,
+                "signal": result.signal.value if result.signal else None,
+                "hard_fail": result.hard_fail,
+                "correction_candidates": result.correction_candidates,
+            }
+            for result in validation_results
+        ]
+        return await self.build_report(
+            decision_id=decision_id,
+            outcome=decision.outcome,
+            risk_score=decision.risk_score,
+            validation_results=validation_dicts,
+            threat_intel_matches=threat_intel_matches,
+            component_scores=decision.signal_scores,
+            processing_latency_ms=processing_latency_ms,
+            override_available=override_available,
         )
 
     def _build_validation_chain(
@@ -126,6 +177,59 @@ class ReportBuilder:
             )
             chain.append(step)
         return chain
+
+    def _build_rule_trace(self, validation_results: List[Dict]) -> List[Dict]:
+        """Build machine-readable trace of all evaluated rules."""
+        trace = []
+        for result in validation_results:
+            trace.append(
+                {
+                    "rule_id": result.get("rule_id", result.get("rule_name", "")),
+                    "passed": result.get("passed", False),
+                    "signal": result.get("signal"),
+                    "hard_fail": result.get("hard_fail", False),
+                    "correction_candidates": result.get("correction_candidates", []),
+                }
+            )
+        return trace
+
+    def _extract_citations(
+        self, validation_results: List[Dict], threat_intel_matches: List[Dict]
+    ) -> List[str]:
+        citations: list[str] = []
+        for result in validation_results:
+            metadata = result.get("metadata", {})
+            source = metadata.get("source") if isinstance(metadata, dict) else None
+            if source:
+                citations.append(str(source))
+
+        for match in threat_intel_matches:
+            source = match.get("source")
+            match_id = match.get("match_id") or match.get("id")
+            if source and match_id:
+                citations.append(f"{source}:{match_id}")
+
+        deduped: list[str] = []
+        seen = set()
+        for citation in citations:
+            if citation in seen:
+                continue
+            seen.add(citation)
+            deduped.append(citation)
+        return deduped
+
+    def _build_confidence_breakdown(
+        self, validation_chain: List[ValidationStep], component_scores: Dict[str, float]
+    ) -> Dict[str, float]:
+        if not validation_chain:
+            return dict(component_scores)
+
+        avg_validation_confidence = sum(step.confidence for step in validation_chain) / len(
+            validation_chain
+        )
+        breakdown = dict(component_scores)
+        breakdown["validation_average"] = round(avg_validation_confidence, 4)
+        return breakdown
 
     def _generate_rationale(
         self,

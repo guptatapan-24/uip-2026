@@ -10,6 +10,8 @@ from typing import List, Optional
 from auth import CurrentUser, get_current_user
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from services.audit.audit_log import get_audit_log as get_audit_log_service
+from services.gateway.state import get_gateway_state
 
 router = APIRouter()
 
@@ -53,11 +55,29 @@ async def get_audit_log(
     Returns:
         List of audit log entries with hashes
     """
-    # TODO: Query PostgreSQL audit_log table
-    # TODO: Verify hash chain integrity
-    # TODO: Return entries
+    audit = get_audit_log_service()
+    start_id = max(1, start_entry_id)
+    entries = await audit._fetch_entries(start_id=start_id, end_id=None)
 
-    return []
+    if decision_id:
+        entries = [entry for entry in entries if entry.get("decision_id") == decision_id]
+
+    entries = entries[:limit]
+    verification = await audit.verify_chain(start_id=start_id)
+    broken_links = set(verification.get("broken_links", []))
+
+    return [
+        AuditLogEntry(
+            entry_id=int(entry["id"]),
+            decision_id=str(entry["decision_id"]),
+            record_data=dict(entry.get("record_data") or {}),
+            prev_hash=str(entry.get("prev_hash") or ""),
+            curr_hash=str(entry.get("curr_hash") or ""),
+            created_at=str(entry.get("created_at") or ""),
+            verified=int(entry["id"]) not in broken_links,
+        )
+        for entry in entries
+    ]
 
 
 @router.get("/audit/verify-chain", summary="Verify audit log hash chain integrity")
@@ -85,15 +105,8 @@ async def verify_audit_chain(
             "message": str
         }
     """
-    # TODO: Call Dhruv's audit_log.verify_chain()
-
-    return {
-        "valid": True,
-        "total_entries": 0,
-        "verified_entries": 0,
-        "broken_links": [],
-        "message": "Chain verified",
-    }
+    audit = get_audit_log_service()
+    return await audit.verify_chain(start_id=max(1, start_entry_id), end_id=end_entry_id)
 
 
 @router.get(
@@ -118,9 +131,52 @@ async def get_decision_audit_trail(
             "timeline": [...]
         }
     """
-    # TODO: Query audit_log + analyst_overrides tables
+    audit = get_audit_log_service()
+    entries = await audit._fetch_entries(start_id=1, end_id=None)
+    decision_entries = [entry for entry in entries if entry.get("decision_id") == decision_id]
+    overrides = get_gateway_state().list_overrides_for_decision(decision_id)
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"No audit trail found for decision {decision_id}",
-    )
+    if not decision_entries and not overrides:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No audit trail found for decision {decision_id}",
+        )
+
+    timeline = []
+    for entry in decision_entries:
+        timeline.append(
+            {
+                "type": "audit_entry",
+                "entry_id": entry.get("id"),
+                "timestamp": str(entry.get("created_at") or ""),
+            }
+        )
+    for record in overrides:
+        timeline.append(
+            {
+                "type": "override",
+                "override_id": record.override_id,
+                "timestamp": record.override_timestamp,
+            }
+        )
+    timeline.sort(key=lambda item: item.get("timestamp", ""))
+
+    initial = None
+    if decision_entries:
+        first = decision_entries[0]
+        initial = AuditLogEntry(
+            entry_id=int(first["id"]),
+            decision_id=str(first["decision_id"]),
+            record_data=dict(first.get("record_data") or {}),
+            prev_hash=str(first.get("prev_hash") or ""),
+            curr_hash=str(first.get("curr_hash") or ""),
+            created_at=str(first.get("created_at") or ""),
+            verified=True,
+        ).model_dump()
+
+    return {
+        "decision_id": decision_id,
+        "initial_decision": initial,
+        "overrides": [item.model_dump() for item in overrides],
+        "timeline": timeline,
+    }

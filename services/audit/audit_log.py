@@ -51,16 +51,18 @@ class AuditLog:
         """
         self.db = db_connection
         self.last_hash = None  # Track last hash for chaining
+        self._entries: list[dict] = []
 
     async def initialize(self):
         """Load last hash from database on startup."""
         if not self.db:
+            if self._entries:
+                self.last_hash = self._entries[-1]["curr_hash"]
             return
 
-        # TODO: Query audit_log table for last entry
-        # SELECT curr_hash FROM audit_log ORDER BY id DESC LIMIT 1
-        # Set self.last_hash
-        pass
+        rows = await self._fetch_entries(start_id=1, end_id=None)
+        if rows:
+            self.last_hash = rows[-1]["curr_hash"]
 
     async def append(self, decision_id: str, record_data: Dict) -> Optional[AuditEntry]:
         """
@@ -74,18 +76,19 @@ class AuditLog:
             Created AuditEntry if successful, None on error
         """
         try:
+            prev_hash = self.last_hash or "0" * 64
             # Compute current hash
-            curr_hash = self._compute_hash(self.last_hash or "", record_data)
+            curr_hash = self._compute_hash(prev_hash, record_data)
 
             # Insert into database
             if self.db:
-                # TODO: INSERT INTO audit_log (decision_id, record_data, prev_hash, curr_hash, created_at)
-                # VALUES (?, ?, ?, ?, NOW())
                 entry_id = await self._insert_entry(
-                    decision_id, record_data, self.last_hash or "0" * 64, curr_hash
+                    decision_id, record_data, prev_hash, curr_hash
                 )
             else:
-                entry_id = 1  # Stub
+                entry_id = await self._insert_entry(
+                    decision_id, record_data, prev_hash, curr_hash
+                )
 
             # Update last hash
             self.last_hash = curr_hash
@@ -94,7 +97,7 @@ class AuditLog:
                 id=entry_id,
                 decision_id=decision_id,
                 record_data=record_data,
-                prev_hash=self.last_hash or "0" * 64,
+                prev_hash=prev_hash,
                 curr_hash=curr_hash,
                 created_at=datetime.now().isoformat(),
             )
@@ -122,20 +125,7 @@ class AuditLog:
                 "message": str
             }
         """
-        if not self.db:
-            return {
-                "valid": True,
-                "total_entries": 0,
-                "verified_entries": 0,
-                "broken_links": [],
-                "message": "No database connection",
-            }
-
         try:
-            # TODO: Query all entries in range
-            # SELECT id, record_data, prev_hash, curr_hash FROM audit_log
-            # WHERE id >= start_id AND id <= end_id ORDER BY id
-
             entries = await self._fetch_entries(start_id, end_id)
 
             verified = 0
@@ -193,12 +183,75 @@ class AuditLog:
     async def _insert_entry(
         self, decision_id: str, record_data: Dict, prev_hash: str, curr_hash: str
     ) -> int:
-        """Insert entry into audit_log table. TODO: Implement."""
-        return 1
+        """Insert entry into audit_log table or in-memory fallback."""
+        if not self.db:
+            entry_id = len(self._entries) + 1
+            self._entries.append(
+                {
+                    "id": entry_id,
+                    "decision_id": decision_id,
+                    "record_data": record_data,
+                    "prev_hash": prev_hash,
+                    "curr_hash": curr_hash,
+                    "created_at": datetime.now().isoformat(),
+                }
+            )
+            return entry_id
+
+        from sqlalchemy import text
+
+        query = text(
+            """
+            INSERT INTO audit_log (decision_id, record_data, prev_hash, curr_hash, created_at)
+            VALUES (:decision_id, :record_data, :prev_hash, :curr_hash, NOW())
+            RETURNING id
+            """
+        )
+        result = await self.db.execute(
+            query,
+            {
+                "decision_id": decision_id,
+                "record_data": record_data,
+                "prev_hash": prev_hash,
+                "curr_hash": curr_hash,
+            },
+        )
+        await self.db.commit()
+        return int(result.scalar_one())
 
     async def _fetch_entries(self, start_id: int, end_id: Optional[int]) -> List[Dict]:
-        """Fetch entries from audit_log. TODO: Implement."""
-        return []
+        """Fetch entries from audit_log table or in-memory fallback."""
+        if not self.db:
+            if end_id is None:
+                return [e for e in self._entries if e["id"] >= start_id]
+            return [e for e in self._entries if start_id <= e["id"] <= end_id]
+
+        from sqlalchemy import text
+
+        if end_id is None:
+            query = text(
+                """
+                SELECT id, decision_id::text AS decision_id, record_data, prev_hash, curr_hash, created_at
+                FROM audit_log
+                WHERE id >= :start_id
+                ORDER BY id ASC
+                """
+            )
+            params = {"start_id": start_id}
+        else:
+            query = text(
+                """
+                SELECT id, decision_id::text AS decision_id, record_data, prev_hash, curr_hash, created_at
+                FROM audit_log
+                WHERE id >= :start_id AND id <= :end_id
+                ORDER BY id ASC
+                """
+            )
+            params = {"start_id": start_id, "end_id": end_id}
+
+        result = await self.db.execute(query, params)
+        rows = result.mappings().all()
+        return [dict(row) for row in rows]
 
 
 # Singleton

@@ -11,6 +11,7 @@ from typing import List, Optional
 from auth import CurrentUser, get_current_user
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from services.gateway.state import get_gateway_state
 
 router = APIRouter()
 
@@ -75,11 +76,42 @@ async def list_decisions(
     Returns:
         List of decision summaries
     """
-    # TODO: Query PostgreSQL with filters
-    # TODO: Apply pagination
-    # TODO: Return summaries
+    state = get_gateway_state()
+    decisions = state.list_decisions()
 
-    return []
+    if outcome:
+        decisions = [d for d in decisions if d.outcome == outcome]
+    if alert_id:
+        decisions = [d for d in decisions if d.alert_id == alert_id]
+
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        decisions = [
+            d
+            for d in decisions
+            if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) >= start_dt
+        ]
+
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        decisions = [
+            d
+            for d in decisions
+            if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) <= end_dt
+        ]
+
+    page = decisions[offset : offset + limit]
+    return [
+        DecisionSummary(
+            decision_id=item.decision_id,
+            alert_id=item.alert_id,
+            outcome=item.outcome,
+            risk_score=item.risk_score,
+            created_at=item.created_at,
+            created_by=item.created_by,
+        )
+        for item in page
+    ]
 
 
 @router.get(
@@ -103,12 +135,25 @@ async def get_decision_detail(
     Raises:
         404: Decision not found
     """
-    # TODO: Query PostgreSQL
-    # TODO: Reconstruct decision details
+    decision = get_gateway_state().get_decision(decision_id)
+    if decision is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Decision {decision_id} not found",
+        )
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Decision {decision_id} not found",
+    return DecisionDetail(
+        decision_id=decision.decision_id,
+        alert_id=decision.alert_id,
+        llm_output=decision.llm_output,
+        outcome=decision.outcome,
+        risk_score=decision.risk_score,
+        validation_results=decision.validation_results,
+        analyst_rationale=decision.analyst_rationale,
+        analyst_override=decision.analyst_override,
+        created_at=decision.created_at,
+        created_by=decision.created_by,
+        updated_at=decision.updated_at,
     )
 
 
@@ -129,6 +174,25 @@ async def get_decision_stats(
     Returns:
         {"total": int, "allow": int, "flag": int, "block": int, "correct": int}
     """
-    # TODO: Aggregate decision counts by outcome from PostgreSQL
+    decisions = get_gateway_state().list_decisions()
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+        decisions = [
+            d
+            for d in decisions
+            if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) >= start_dt
+        ]
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+        decisions = [
+            d
+            for d in decisions
+            if datetime.fromisoformat(d.created_at.replace("Z", "+00:00")) <= end_dt
+        ]
 
-    return {"total": 0, "allow": 0, "flag": 0, "block": 0, "correct": 0}
+    stats = {"total": len(decisions), "allow": 0, "flag": 0, "block": 0, "correct": 0}
+    for decision in decisions:
+        outcome = decision.outcome.lower()
+        if outcome in stats:
+            stats[outcome] += 1
+    return stats

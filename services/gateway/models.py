@@ -146,6 +146,7 @@ class DecideRequest(BaseModel):
 class DecisionResponse(BaseModel):
     """Final decision from the policy-driven decision engine."""
 
+    decision_id: str | None = None
     alert_id: str
     outcome: Literal["ALLOW", "FLAG", "BLOCK", "CORRECT"]
     risk_score: float = Field(ge=0.0, le=1.0)

@@ -11,6 +11,7 @@ GitHub source: https://github.com/mitre/cti
 import asyncio
 import json
 import os
+from pathlib import Path
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -32,12 +33,24 @@ class AttackClient:
         self.sync_interval_days = int(os.getenv("ATTACK_SYNC_INTERVAL_DAYS", "30"))
         self.techniques: Dict[str, Dict] = {}
         self.tactics: Dict[str, Dict] = {}
+        self._cache_file = Path(self.cache_dir) / "enterprise-attack.json"
 
     async def initialize(self):
         """Load ATT&CK data from cache or API."""
-        # TODO: Load techniques.json and tactics.json
-        # TODO: Check cache freshness, sync if needed
-        pass
+        Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
+
+        cache_is_fresh = False
+        if self._cache_file.exists():
+            age_seconds = (datetime.now().timestamp() - self._cache_file.stat().st_mtime)
+            cache_is_fresh = age_seconds < self.sync_interval_days * 86400
+
+        if cache_is_fresh:
+            await self._load_from_cache()
+            return
+
+        synced = await self.sync_data()
+        if not synced and self._cache_file.exists():
+            await self._load_from_cache()
 
     async def get_technique(self, technique_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -61,8 +74,18 @@ class AttackClient:
         Returns:
             List of techniques for tactic
         """
-        # TODO: Filter techniques by tactic
-        return []
+        tactic_norm = tactic.strip().lower()
+        results: list[dict[str, Any]] = []
+        for technique in self.techniques.values():
+            phases = technique.get("kill_chain_phases", [])
+            phase_names = [
+                str(phase.get("phase_name", "")).replace("-", " ").lower()
+                for phase in phases
+                if isinstance(phase, dict)
+            ]
+            if tactic_norm in phase_names:
+                results.append(technique)
+        return results
 
     async def search_techniques(self, query: str) -> List[Dict[str, Any]]:
         """
@@ -74,8 +97,22 @@ class AttackClient:
         Returns:
             List of matching techniques
         """
-        # TODO: Semantic search over technique descriptions
-        return []
+        q = query.strip().lower()
+        if not q:
+            return []
+
+        matches: list[dict[str, Any]] = []
+        for technique in self.techniques.values():
+            name = str(technique.get("name", "")).lower()
+            descriptions = " ".join(
+                str(d.get("description", ""))
+                for d in technique.get("external_references", [])
+                if isinstance(d, dict)
+            ).lower()
+            if q in name or q in descriptions:
+                matches.append(technique)
+
+        return matches[:25]
 
     async def sync_data(self) -> bool:
         """
@@ -86,26 +123,55 @@ class AttackClient:
         """
         try:
             async with httpx.AsyncClient() as client:
-                # Fetch techniques
-                techniques_url = f"{self.base_url}techniques.json"
-                resp = await client.get(techniques_url)
+                enterprise_attack_url = f"{self.base_url}enterprise-attack.json"
+                resp = await client.get(enterprise_attack_url, timeout=30)
                 resp.raise_for_status()
-                techniques_data = resp.json()
+                dataset = resp.json()
 
-                # Parse and cache
+                objects = dataset.get("objects", [])
                 self.techniques = {
-                    obj["external_references"][0]["external_id"]: obj
-                    for obj in techniques_data.get("objects", [])
+                    ref["external_id"]: obj
+                    for obj in objects
                     if obj.get("type") == "attack-pattern"
+                    for ref in obj.get("external_references", [])
+                    if isinstance(ref, dict)
+                    and ref.get("external_id", "").startswith("T")
+                }
+                self.tactics = {
+                    obj.get("name", ""): obj
+                    for obj in objects
+                    if obj.get("type") == "x-mitre-tactic"
                 }
 
-                # TODO: Fetch and parse tactics similarly
+                Path(self.cache_dir).mkdir(parents=True, exist_ok=True)
+                self._cache_file.write_text(json.dumps(dataset), encoding="utf-8")
 
                 return True
 
         except Exception as e:
             print(f"ATT&CK sync failed: {e}")
             return False
+
+    async def _load_from_cache(self) -> None:
+        try:
+            dataset = json.loads(self._cache_file.read_text(encoding="utf-8"))
+            objects = dataset.get("objects", [])
+            self.techniques = {
+                ref["external_id"]: obj
+                for obj in objects
+                if obj.get("type") == "attack-pattern"
+                for ref in obj.get("external_references", [])
+                if isinstance(ref, dict)
+                and ref.get("external_id", "").startswith("T")
+            }
+            self.tactics = {
+                obj.get("name", ""): obj
+                for obj in objects
+                if obj.get("type") == "x-mitre-tactic"
+            }
+        except Exception:
+            self.techniques = {}
+            self.tactics = {}
 
 
 # Singleton

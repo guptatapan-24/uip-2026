@@ -5,11 +5,19 @@ Policy management and analyst override endpoints.
 Allows SOC_ADMIN to override automated decisions and manage policy profiles.
 """
 
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from auth import CurrentUser, require_role
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from services.audit.audit_log import get_audit_log
+from services.common.config import ROOT_DIR, load_yaml_config
+import yaml
+
+from services.gateway.state import OverrideRecord, get_gateway_state
 
 router = APIRouter()
 
@@ -71,14 +79,67 @@ async def override_decision(
             detail=f"Invalid outcome. Must be one of: {', '.join(valid_outcomes)}",
         )
 
-    # TODO: Fetch original decision from PostgreSQL
-    # TODO: Create override record in analyst_overrides table
-    # TODO: Update decisions table
-    # TODO: Append to audit log with hash chain
+    state = get_gateway_state()
+    original = state.get_decision(request.decision_id)
+    if original is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Decision {request.decision_id} not found",
+        )
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Decision {request.decision_id} not found",
+    previous_outcome = original.outcome
+    updated = state.apply_override(
+        decision_id=request.decision_id,
+        new_outcome=request.new_outcome,
+        overridden_by=current_user.user_id,
+    )
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Decision {request.decision_id} not found",
+        )
+
+    override_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    audit_entry = await get_audit_log().append(
+        decision_id=request.decision_id,
+        record_data={
+            "type": "policy_override",
+            "override_id": override_id,
+            "decision_id": request.decision_id,
+            "previous_outcome": previous_outcome,
+            "new_outcome": request.new_outcome,
+            "rationale": request.rationale,
+            "correction_suggestion": request.correction_suggestion,
+            "overridden_by": current_user.user_id,
+            "override_timestamp": timestamp,
+        },
+    )
+
+    audit_hash = audit_entry.curr_hash if audit_entry else ""
+    state.add_override(
+        OverrideRecord(
+            override_id=override_id,
+            decision_id=request.decision_id,
+            previous_outcome=previous_outcome,
+            new_outcome=request.new_outcome,
+            rationale=request.rationale,
+            correction_suggestion=request.correction_suggestion,
+            overridden_by=current_user.user_id,
+            override_timestamp=timestamp,
+            audit_hash=audit_hash,
+        )
+    )
+
+    return PolicyOverrideResponse(
+        override_id=override_id,
+        decision_id=request.decision_id,
+        previous_outcome=previous_outcome,
+        new_outcome=request.new_outcome,
+        overridden_by=current_user.user_id,
+        override_timestamp=timestamp,
+        audit_hash=audit_hash,
     )
 
 
@@ -97,19 +158,24 @@ async def list_policy_profiles(
     Returns:
         {"profiles": [{"name": str, "thresholds": {...}, "active": bool}, ...]}
     """
-    # TODO: Load policy_profiles.yaml
-    # TODO: Return parsed profiles
+    profiles = load_yaml_config("config/policy_profiles.yaml").get("profiles", {})
+    active_profile = load_yaml_config("config/policy_profiles.yaml").get(
+        "active_profile", "default"
+    )
 
-    return {
-        "profiles": [
+    payload = []
+    for name, profile in profiles.items():
+        payload.append(
             {
-                "name": "default",
-                "description": "Default SOC policy",
-                "thresholds": {"allow_min": 0.85, "flag_min": 0.60, "block_max": 0.60},
-                "active": True,
+                "name": name,
+                "description": profile.get("description", f"{name} policy profile"),
+                "thresholds": profile.get("thresholds", {}),
+                "weights": profile.get("weights", {}),
+                "active": name == active_profile,
             }
-        ]
-    }
+        )
+
+    return {"profiles": payload}
 
 
 @router.post(
@@ -130,10 +196,42 @@ async def create_policy_profile(
     Returns:
         Created profile details
     """
-    # TODO: Validate profile structure
-    # TODO: Save to policy_profiles.yaml
-    # TODO: Return created profile
+    name = str(profile_data.get("name", "")).strip()
+    profile = profile_data.get("profile")
 
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid profile configuration"
-    )
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile name is required",
+        )
+    if not isinstance(profile, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="profile must be an object",
+        )
+
+    for required in ("weights", "thresholds", "signal_defaults"):
+        if required not in profile or not isinstance(profile[required], dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"profile.{required} must be provided as an object",
+            )
+
+    path = ROOT_DIR / "config" / "policy_profiles.yaml"
+    with path.open("r", encoding="utf-8") as handle:
+        current = yaml.safe_load(handle) or {}
+
+    profiles = current.setdefault("profiles", {})
+    if name in profiles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Profile '{name}' already exists",
+        )
+
+    profiles[name] = profile
+
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(current, handle, sort_keys=False)
+
+    load_yaml_config.cache_clear()
+    return {"name": name, "profile": profile, "created": True}
