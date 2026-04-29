@@ -1,0 +1,47 @@
+name: FAISS Integration Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  faiss-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install faiss-cpu
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install faiss-cpu --no-cache-dir
+
+      - name: Install project deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Start infra compose
+        run: |
+          cd infra
+          docker compose up -d --build
+
+      - name: Wait for API
+        run: |
+          for i in {1..30}; do curl -sSf http://localhost:8000/health && break || sleep 2; done
+
+      - name: Run FAISS smoke test
+        run: |
+          python -m pytest -q tests/integration/test_faiss_smoke.py
+
+      - name: Tear down infra
+        if: always()
+        run: |
+          cd infra
+          docker compose down -v

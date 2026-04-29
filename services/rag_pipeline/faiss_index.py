@@ -32,6 +32,12 @@ class FAISSIndex:
         self.index: Optional[faiss.IndexFlatIP] = None
         self.documents: List[Dict[str, str]] = []  # Metadata for each indexed document
         self._ensure_index_dir()
+        # Attempt to load an existing persisted index on initialization
+        try:
+            self.load_index()
+        except Exception:
+            # If load fails, continue with an empty index (will be built on demand)
+            pass
 
     def _ensure_index_dir(self):
         """Ensure index directory exists."""

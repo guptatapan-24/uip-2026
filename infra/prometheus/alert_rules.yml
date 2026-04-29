@@ -1,0 +1,11 @@
+groups:
+  - name: llm-verifier.rules
+    rules:
+      - alert: LLMVerifierCircuitOpen
+        expr: llm_verifier_circuit_open > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "LLM verifier circuit breaker is open"
+          description: "The LLM verifier circuit breaker has been open for more than 5 minutes. Investigate Ollama/OpenAI connectivity or increased latency."

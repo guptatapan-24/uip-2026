@@ -18,6 +18,33 @@ from pydantic import BaseModel, Field
 
 import httpx
 
+try:
+    from prometheus_client import Counter, Gauge
+except Exception:  # pragma: no cover - optional dependency
+    class _NoopMetric:
+        def labels(self, **kwargs):
+            return self
+
+        def inc(self, amount=1):
+            return None
+
+        def set(self, value):
+            return None
+
+    def Counter(*args, **kwargs):
+        return _NoopMetric()
+
+    def Gauge(*args, **kwargs):
+        return _NoopMetric()
+
+
+# Prometheus metrics
+llm_calls = Counter("llm_verifier_calls_total", "Total LLM verifier calls", ["provider"])  # provider: ollama/openai/mock
+llm_failures = Counter("llm_verifier_failures_total", "LLM verifier failures", ["provider"])  # failures per provider
+llm_fallbacks = Counter("llm_verifier_fallbacks_total", "LLM verifier fallbacks")
+llm_circuit_open_total = Counter("llm_verifier_circuit_open_total", "Times LLM circuit breaker opened")
+llm_circuit_open = Gauge("llm_verifier_circuit_open", "Is circuit breaker currently open (0/1)")
+
 
 class VerificationResult(BaseModel):
     """Structured contradiction-detection result."""
@@ -60,9 +87,25 @@ class LLMVerifier:
         )
         self.openai_model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
-        self.circuit_breaker_threshold = 5  # failures before breaker opens
+        # Circuit-breaker and retry configuration (env-overridable)
+        self.circuit_breaker_threshold = int(os.getenv("LLM_CB_THRESHOLD", "5"))
         self.circuit_breaker_count = 0
         self.circuit_breaker_open = False
+        # When breaker opens, automatically reset after this many seconds
+        self.circuit_breaker_reset_seconds = int(os.getenv("LLM_CB_RESET_SECONDS", "60"))
+        self._last_failure_ts = 0
+
+        # Retry/backoff for Ollama calls: number of attempts and base backoff seconds
+        self.ollama_retry_attempts = int(os.getenv("OLLAMA_RETRY_ATTEMPTS", "2"))
+        self.ollama_backoff_base = float(os.getenv("OLLAMA_BACKOFF_BASE", "0.5"))
+
+        # Simple logger
+        try:
+            import logging
+
+            self._log = logging.getLogger(__name__)
+        except Exception:
+            self._log = None
 
     async def verify(self, claim: str, evidence: Any, threat_intel: Dict | None = None) -> VerificationResult:
         """Compatibility alias for callers that provide a claim and evidence list."""
@@ -99,53 +142,74 @@ class LLMVerifier:
                 provider="mock",
             )
 
-        # Circuit breaker check
+        # If circuit is open, check if reset interval passed; if so, reset
         if self.circuit_breaker_open:
-            return VerificationResult(
-                contradiction_detected=False,
-                contradiction_prob=0.0,
-                explanation="LLM verifier unavailable (circuit breaker open)",
-                skipped=True,
-                latency_ms=0.0,
-                provider="none",
-            )
+            if time.time() - self._last_failure_ts > self.circuit_breaker_reset_seconds:
+                self.reset_circuit_breaker()
+            else:
+                return VerificationResult(
+                    contradiction_detected=False,
+                    contradiction_prob=0.0,
+                    explanation="LLM verifier unavailable (circuit breaker open)",
+                    skipped=True,
+                    latency_ms=0.0,
+                    provider="none",
+                )
 
         # Try Ollama first
-        try:
-            result = await self._verify_with_ollama(claim, context, threat_intel)
-            latency_ms = (time.time() - start_time) * 1000
+        # Try Ollama with retries and exponential backoff
+        ollama_exception = None
+        for attempt in range(1, self.ollama_retry_attempts + 1):
+            try:
+                # record attempt
+                llm_calls.labels(provider="ollama").inc()
+                result = await self._verify_with_ollama(claim, context, threat_intel)
+                latency_ms = (time.time() - start_time) * 1000
 
-            if latency_ms > self.ollama_timeout * 1000:
-                # Timeout - circuit breaker increments
-                self.circuit_breaker_count += 1
-                if self.circuit_breaker_count >= self.circuit_breaker_threshold:
-                    self.circuit_breaker_open = True
-            else:
                 # Success - reset counter
                 self.circuit_breaker_count = 0
 
-            result.latency_ms = round(latency_ms, 2)
-            result.provider = "ollama"
-            return result
-
-        except Exception as e:
-            print(f"Ollama verification failed: {e}")
-            self.circuit_breaker_count += 1
-
-            if self.circuit_breaker_count >= self.circuit_breaker_threshold:
-                self.circuit_breaker_open = True
+                result.latency_ms = round(latency_ms, 2)
+                result.provider = "ollama"
+                return result
+            except Exception as e:
+                ollama_exception = e
+                self.circuit_breaker_count += 1
+                self._last_failure_ts = time.time()
+                # metric: failure on ollama
+                llm_failures.labels(provider="ollama").inc()
+                if self._log:
+                    self._log.warning("Ollama attempt %d failed: %s", attempt, str(e))
+                # If reached threshold, open circuit
+                if self.circuit_breaker_count >= self.circuit_breaker_threshold:
+                    self.circuit_breaker_open = True
+                    if self._log:
+                        self._log.error("LLM verifier circuit breaker opened")
+                    break
+                # Backoff before next attempt
+                backoff = self.ollama_backoff_base * (2 ** (attempt - 1))
+                await asyncio.sleep(backoff)
 
         # Fallback to OpenAI
         if self.fallback_provider == "openai":
             try:
+                llm_fallbacks.inc()
+                llm_calls.labels(provider="openai").inc()
                 result = await self._verify_with_openai(claim, context, threat_intel)
                 result.latency_ms = round((time.time() - start_time) * 1000, 2)
                 result.provider = "openai"
                 return result
             except Exception as e:
-                print(f"OpenAI fallback failed: {e}")
+                if self._log:
+                    self._log.warning("OpenAI fallback failed: %s", str(e))
+                llm_failures.labels(provider="openai").inc()
 
         # Both failed - return safe default
+        # If circuit just opened, update metrics
+        if self.circuit_breaker_open:
+            llm_circuit_open_total.inc()
+            llm_circuit_open.set(1)
+
         return VerificationResult(
             contradiction_detected=False,
             contradiction_prob=0.0,
@@ -270,6 +334,12 @@ Respond with JSON in the form:
         """Manually reset circuit breaker for recovery."""
         self.circuit_breaker_count = 0
         self.circuit_breaker_open = False
+        self._last_failure_ts = 0
+        # update prometheus gauge
+        try:
+            llm_circuit_open.set(0)
+        except Exception:
+            pass
 
 
 # Singleton

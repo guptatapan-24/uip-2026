@@ -1,0 +1,43 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "llm-verifier",
+    "title": "LLM Verifier Overview",
+    "timezone": "browser",
+    "panels": [
+      {
+        "type": "graph",
+        "title": "LLM Verifier Calls",
+        "targets": [
+          {
+            "expr": "llm_verifier_calls_total",
+            "legendFormat": "{{provider}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 }
+      },
+      {
+        "type": "graph",
+        "title": "LLM Verifier Failures",
+        "targets": [
+          {
+            "expr": "llm_verifier_failures_total",
+            "legendFormat": "{{provider}}",
+            "refId": "B"
+          }
+        ],
+        "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 }
+      },
+      {
+        "type": "stat",
+        "title": "Circuit Open",
+        "targets": [
+          { "expr": "llm_verifier_circuit_open", "refId": "C" }
+        ],
+        "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 }
+      }
+    ],
+    "schemaVersion": 16
+  }
+}

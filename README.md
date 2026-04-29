@@ -198,6 +198,26 @@ Python 3.11
 Docker & Docker Compose
 PostgreSQL 15+
 Redis 7+
+faiss (optional for RAG retrieval tests)
+```
+
+### Running Tests Locally
+
+Use the local virtualenv and the repo root as PYTHONPATH. The integration suite uses an ephemeral RSA keypair
+so JWT-based tests run without manual key setup.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+# Run unit + focused integration tests
+pytest -q tests/
+
+# To run the full CI-style integration suite (requires Postgres + Redis)
+export DATABASE_URL=postgresql+asyncpg://test:test@127.0.0.1:5432/test_db
+export REDIS_URL=redis://127.0.0.1:6379/0
+alembic -c alembic.ini upgrade head
+pytest -q tests/integration/
 ```
 
 ### Installation
@@ -378,6 +398,23 @@ docker run -p 8000:8000 \
 ## Contributing
 
 Team members assigned to specific modules:
+
+## CI Workflows
+
+Two CI workflows are provided in `.github/workflows/`:
+
+- `infra-smoke.yml` — spins up the `infra/` docker-compose stack, runs a smoke integration test, then tears down.
+- `deploy.yml` — builds the Docker image using `infra/Dockerfile` and pushes to the GitHub Container Registry on push to `main`.
+
+See the files for configuration and required secrets (e.g., `GITHUB_TOKEN`, optional `DOCKERHUB_TOKEN`).
+
+### Monitoring and Alerts
+
+- Grafana dashboard: `infra/grafana/llm_verifier_dashboard.json`
+- Prometheus alert rules: `infra/prometheus/alert_rules.yml`
+
+To import the Grafana dashboard, open Grafana → Dashboards → Import and paste the JSON file contents.
+
 
 - **Tanushree**: `services/claim_extractor/` (NER + BERT extraction)
 - **Tapan**: `services/decision_engine/` (Risk scoring + policy)

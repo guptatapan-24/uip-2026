@@ -1,3 +1,36 @@
+# Progress Tracker — snapshot: 2026-04-29
+
+Summary of recent work and next steps for the LLM Hallucination Firewall project.
+
+Completed
+- Gateway FastAPI app and routers implemented and wired to runtime persistence fallback.
+- DB-first persistence helpers added (`services/gateway/persistence.py`) with in-memory fallback.
+- Audit append-only hash chain implemented (`services/audit/audit_log.py`).
+- Decision engine implemented and wired to tests (`services/decision_engine/engine.py`).
+- Deterministic validation rules implemented and refined (`services/validation_engine/deterministic.py`).
+- LLM verifier with mock and Ollama/OpenAI fallback implemented (`services/validation_engine/llm_verifier.py`).
+- RAG clients, FAISS index management, and Celery sync jobs implemented (`services/rag_pipeline`).
+- Frontend Vite build fixes and dashboard adjustments.
+- Updated many tests to work with current API shapes.
+- Added an integration E2E test: `tests/integration/test_e2e_flow.py` (passes locally).
+
+In Progress
+- Add CI workflow and integrate focused test runs (draft added: `.github/workflows/ci.yml`).
+
+Remaining / Next Steps
+1. Expand CI to a matrix with minimal and full profiles (FAISS, DB, heavy deps).
+2. Resolve pytest collection collisions across subprojects (rename or namespace tests).
+3. Finalize DB migrations and run integration tests with a real Postgres + FAISS backend.
+4. Harden LLM verifier circuit-breaker and fallback policies for production.
+5. Add end-to-end test covering decision persistence and audit verification (append + verify).
+
+Notes
+- The current integration test exercises `/api/v1/validate` and audit verify-chain using the dev auth bypass; it intentionally uses a focused dependency set to remain runnable in minimal CI.
+
+If you'd like, I can now:
+- Expand the CI workflow (matrix, cache, full-test job).
+- Implement DB migrations and add a docker-compose job to run full E2E.
+- Rename conflicting tests to avoid pytest collisions in CI.
 # Project Progress Tracker
 
 Last updated: 2026-04-28

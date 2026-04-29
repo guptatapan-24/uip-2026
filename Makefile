@@ -1,3 +1,46 @@
+PYTHON=python
+PIP=$(PYTHON) -m pip
+
+.PHONY: help build docker-build docker-run lint format release k8s-apply load-test gen-keys
+
+help:
+	@printf "Makefile targets:\n  build        - install deps into .venv\n  docker-build - build container image\n  docker-run   - run infra/docker-compose up\n  lint         - run ruff/black checks\n  format       - run black/ruff fixes\n  gen-keys     - generate RSA JWT keypair (infra/scripts)\n  release      - build and pack release artifact\n  k8s-apply    - apply infra/k8s manifests (requires kubectl)\n  load-test    - run local load test against API\"
+
+build:
+	$(PIP) install --upgrade pip
+	$(PIP) install -r requirements.txt
+
+docker-build:
+	docker build -f infra/Dockerfile -t llm-firewall:local .
+
+docker-run:
+	cd infra && docker compose up -d --build
+
+lint:
+	$(PYTHON) -m ruff check .
+	black --check .
+
+format:
+	black .
+	ruff check --fix .
+
+gen-keys:
+	sh infra/scripts/generate_jwt_keys.sh infra/keys || powershell -File infra/scripts/generate_jwt_keys.ps1 infra/keys
+
+release:
+	# Create a source tarball and Docker image tag
+	git rev-parse --short HEAD > .git/HEAD_SHORT || true
+	TGZ=release/llm-firewall-$$(date +%Y%m%d)-$$(git rev-parse --short HEAD).tar.gz
+	mkdir -p release
+	tar -czf $$TGZ .
+	echo "Release artifact created: $$TGZ"
+
+k8s-apply:
+	kubectl apply -f infra/k8s/
+
+load-test:
+	$(PYTHON) -m pip install -r requirements.txt
+	$(PYTHON) infra/load_test/locustfile.py --target http://localhost:8000
 # Makefile
 # Convenient commands for development, testing, and deployment
 

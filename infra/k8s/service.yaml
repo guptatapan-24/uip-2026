@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-firewall-api
+  labels:
+    app: llm-firewall
+spec:
+  type: ClusterIP
+  selector:
+    app: llm-firewall
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
