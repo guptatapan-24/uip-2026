@@ -10,10 +10,10 @@ TODO: Integrate Dhruv's rag_pipeline orchestration
 
 from typing import Any, Dict, List, Optional
 
-from attack_client import get_attack_client
-from faiss_index import get_faiss_index
-from kev_client import get_kev_client
-from nvd_client import CVERecord, get_nvd_client
+from .attack_client import get_attack_client
+from .faiss_index import get_faiss_index
+from .kev_client import get_kev_client
+from .nvd_client import CVERecord, get_nvd_client
 from pydantic import BaseModel
 
 

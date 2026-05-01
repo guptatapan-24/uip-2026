@@ -18,8 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 try:
-    from prometheus_client import Counter, Histogram, generate_latest
+    from prometheus_client import REGISTRY, Counter, Histogram, generate_latest
 except ImportError:  # pragma: no cover - fallback for minimal local envs
+    REGISTRY = None
+
     class _NoopMetric:
         def labels(self, **kwargs):
             return self
@@ -45,14 +47,45 @@ from routes import extract, validate, decide, health, decisions, audit, policy, 
 config = get_config()
 logger = logging.getLogger(__name__)
 
+
+def _get_existing_metric(name: str):
+    if REGISTRY is None:
+        return None
+    names = [name]
+    if name.endswith("_total"):
+        names.append(name.removesuffix("_total"))
+    try:
+        collectors = REGISTRY._names_to_collectors  # noqa: SLF001 - required for duplicate-safe metric reuse
+    except AttributeError:
+        return None
+    for candidate in names:
+        if candidate in collectors:
+            return collectors[candidate]
+    return None
+
+
+def get_or_create_counter(name, desc, labelnames=None):
+    existing = _get_existing_metric(name)
+    if existing is not None:
+        return existing
+    return Counter(name, desc, labelnames or [])
+
+
+def get_or_create_histogram(name, desc, labelnames=None):
+    existing = _get_existing_metric(name)
+    if existing is not None:
+        return existing
+    return Histogram(name, desc, labelnames or [])
+
+
 # Prometheus metrics
-validation_counter = Counter(
+validation_counter = get_or_create_counter(
     "validation_requests_total", "Total validation requests", ["endpoint"]
 )
-validation_latency = Histogram(
+validation_latency = get_or_create_histogram(
     "validation_latency_ms", "Validation pipeline latency in milliseconds"
 )
-http_requests = Counter(
+http_requests = get_or_create_counter(
     "http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"]
 )
 

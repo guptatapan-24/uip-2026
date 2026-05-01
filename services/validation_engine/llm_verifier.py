@@ -19,8 +19,10 @@ from pydantic import BaseModel, Field
 import httpx
 
 try:
-    from prometheus_client import Counter, Gauge
+    from prometheus_client import REGISTRY, Counter, Gauge
 except Exception:  # pragma: no cover - optional dependency
+    REGISTRY = None
+
     class _NoopMetric:
         def labels(self, **kwargs):
             return self
@@ -38,12 +40,42 @@ except Exception:  # pragma: no cover - optional dependency
         return _NoopMetric()
 
 
+def _get_existing_metric(name: str):
+    if REGISTRY is None:
+        return None
+    names = [name]
+    if name.endswith("_total"):
+        names.append(name.removesuffix("_total"))
+    try:
+        collectors = REGISTRY._names_to_collectors  # noqa: SLF001 - required for duplicate-safe metric reuse
+    except AttributeError:
+        return None
+    for candidate in names:
+        if candidate in collectors:
+            return collectors[candidate]
+    return None
+
+
+def get_or_create_counter(name, desc, labelnames=None):
+    existing = _get_existing_metric(name)
+    if existing is not None:
+        return existing
+    return Counter(name, desc, labelnames or [])
+
+
+def get_or_create_gauge(name, desc, labelnames=None):
+    existing = _get_existing_metric(name)
+    if existing is not None:
+        return existing
+    return Gauge(name, desc, labelnames or [])
+
+
 # Prometheus metrics
-llm_calls = Counter("llm_verifier_calls_total", "Total LLM verifier calls", ["provider"])  # provider: ollama/openai/mock
-llm_failures = Counter("llm_verifier_failures_total", "LLM verifier failures", ["provider"])  # failures per provider
-llm_fallbacks = Counter("llm_verifier_fallbacks_total", "LLM verifier fallbacks")
-llm_circuit_open_total = Counter("llm_verifier_circuit_open_total", "Times LLM circuit breaker opened")
-llm_circuit_open = Gauge("llm_verifier_circuit_open", "Is circuit breaker currently open (0/1)")
+llm_calls = get_or_create_counter("llm_verifier_calls_total", "Total LLM verifier calls", ["provider"])  # provider: ollama/openai/mock
+llm_failures = get_or_create_counter("llm_verifier_failures_total", "LLM verifier failures", ["provider"])  # failures per provider
+llm_fallbacks = get_or_create_counter("llm_verifier_fallbacks_total", "LLM verifier fallbacks")
+llm_circuit_open_total = get_or_create_counter("llm_verifier_circuit_open_total", "Times LLM circuit breaker opened")
+llm_circuit_open = get_or_create_gauge("llm_verifier_circuit_open", "Is circuit breaker currently open (0/1)")
 
 
 class VerificationResult(BaseModel):
