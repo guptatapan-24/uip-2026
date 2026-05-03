@@ -118,6 +118,43 @@ class ValidateResponse(BaseModel):
     total_latency_ms: float
 
 
+class AnalyzeRequest(BaseModel):
+    """Request to run the complete validation and decision pipeline."""
+
+    llm_output: str = Field(
+        ..., min_length=1, description="LLM-generated security recommendation"
+    )
+    context: ValidationContext
+    extracted_claims: list[ExtractedClaimResponse] | None = Field(
+        None,
+        description="Optional pre-extracted claims; extraction is performed if omitted",
+    )
+
+    @field_validator("llm_output")
+    @classmethod
+    def llm_output_not_blank(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("llm_output must contain non-whitespace characters")
+        return v
+
+
+class AnalyzeResponse(BaseModel):
+    """Response from the end-to-end analyze pipeline."""
+
+    decision_id: str
+    outcome: Literal["ALLOW", "FLAG", "BLOCK", "CORRECT"]
+    risk_score: float = Field(
+        ge=0.0, le=1.0, description="Final computed risk score"
+    )
+    claims: list[ExtractedClaimResponse]
+    analyst_rationale: str
+    rule_trace: list[dict[str, Any]]
+    source_citations: list[str]
+    corrections: list[str]
+    audit_hash: str
+    latency_ms: float
+
+
 # ============================================================================
 # DECISION ENDPOINT MODELS
 # ============================================================================

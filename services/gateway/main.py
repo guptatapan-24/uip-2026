@@ -188,6 +188,7 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
 app.include_router(health.router, tags=["Health"])
 app.include_router(extract.router, prefix="/api/v1", tags=["Extraction"])
 app.include_router(validate.router, prefix="/api/v1", tags=["Validation"])
+app.include_router(validate.router, prefix="/v1", tags=["Validation"])
 app.include_router(decide.router, prefix="/api/v1", tags=["Decision"])
 app.include_router(decisions.router, prefix="/api/v1", tags=["Decisions"])
 app.include_router(audit.router, prefix="/api/v1", tags=["Audit"])
@@ -214,6 +215,8 @@ async def root():
             "health": "/health",
             "extract": "/api/v1/extract",
             "validate": "/api/v1/validate",
+            "validate_alias": "/v1/validate",
+            "analyze": "/api/v1/analyze",
             "decide": "/api/v1/decide",
             "decisions": "/api/v1/decisions",
             "audit": "/api/v1/audit/log",

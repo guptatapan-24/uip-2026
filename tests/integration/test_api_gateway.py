@@ -377,6 +377,51 @@ class TestEndToEndFlow:
         assert decision_data["outcome"] in ["ALLOW", "FLAG", "BLOCK", "CORRECT"]
         assert 0 <= decision_data["risk_score"] <= 1
 
+    def test_analyze_endpoint_runs_full_pipeline(self, client, monkeypatch):
+        """Analyze endpoint should execute the full pipeline and return decision metadata."""
+        monkeypatch.setenv("MOCK_THREAT_INTEL", "true")
+        monkeypatch.setenv("MOCK_LLM_VERIFIER", "true")
+
+        response = client.post(
+            "/api/v1/analyze",
+            json={
+                "llm_output": "CVE-2024-0001 is a critical vulnerability that should be patched.",
+                "context": {
+                    "alert_id": "analyze-001",
+                    "severity_hint": "HIGH",
+                    "policy_profile": "default",
+                },
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["decision_id"]
+        assert data["outcome"] in ["ALLOW", "FLAG", "BLOCK", "CORRECT"]
+        assert 0.0 <= data["risk_score"] <= 1.0
+        assert isinstance(data["claims"], list)
+        assert isinstance(data["rule_trace"], list)
+        assert isinstance(data["source_citations"], list)
+        assert isinstance(data["corrections"], list)
+        assert data["audit_hash"]
+        assert data["latency_ms"] > 0
+
+    def test_v1_validate_alias_keeps_old_endpoint(self, client):
+        """Old /v1/validate alias should still work."""
+        response = client.post(
+            "/v1/validate",
+            json={
+                "llm_output": "CVE-2024-0002 is a high-risk vulnerability.",
+                "context": {
+                    "alert_id": "alias-001",
+                    "severity_hint": "HIGH",
+                    "policy_profile": "default",
+                },
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["alert_id"] == "alias-001"
+
     def test_api_root(self, client):
         """Test API root endpoint."""
         response = client.get("/")
